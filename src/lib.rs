@@ -35,6 +35,23 @@ pub mod job;
 pub mod job_system;
 pub mod worker;
 
+use serde::{Deserialize, Serialize};
+
+/// Strategy for pinning worker threads to CPU cores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PinningStrategy {
+    /// No pinning (standard OS scheduling).
+    #[default]
+    None,
+    /// Linear pinning (worker i -> logical processor i).
+    Linear,
+    /// Pin to physical cores only (even-numbered logical processors), avoiding SMT contention.
+    AvoidSMT,
+    /// Pin to physical cores on the first CCD only (Logical 0, 2, ..., 14).
+    /// This is optimized for AMD Ryzen systems to avoid CCD cross-over latency.
+    CCDIsolation,
+}
+
 pub use counter::Counter;
 pub use job::Job;
 pub use job_system::JobSystem;

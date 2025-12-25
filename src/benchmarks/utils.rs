@@ -1,3 +1,4 @@
+use rustfiber::PinningStrategy;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -22,10 +23,11 @@ pub struct DataPoint {
 pub struct SystemInfo {
     pub cpu_cores: usize,
     pub total_memory_gb: f64,
+    pub pinning_strategy: PinningStrategy,
 }
 
 impl SystemInfo {
-    pub fn collect() -> Self {
+    pub fn collect(strategy: PinningStrategy) -> Self {
         // Get CPU count
         let cpu_cores = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -37,6 +39,7 @@ impl SystemInfo {
         SystemInfo {
             cpu_cores,
             total_memory_gb,
+            pinning_strategy: strategy,
         }
     }
 

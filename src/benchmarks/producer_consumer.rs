@@ -1,5 +1,5 @@
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo, num_cpus};
-use rustfiber::JobSystem;
+use rustfiber::{JobSystem, PinningStrategy};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,16 +10,16 @@ use std::time::Instant;
 /// a good balance between lock overhead reduction and memory locality.
 const PRODUCER_BATCH_SIZE: usize = 32;
 
-pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
+pub fn run_producer_consumer_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 3: Producer-Consumer Stress Test ===");
 
-    let system_info = SystemInfo::collect();
+    let system_info = SystemInfo::collect(strategy);
     eprintln!(
-        "System: {} CPU cores, {:.2} GB total RAM",
-        system_info.cpu_cores, system_info.total_memory_gb
+        "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
+        system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new(num_cpus());
+    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
 
     let test_sizes = vec![
         1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000,

@@ -33,7 +33,7 @@ except ImportError:
     sys.exit(1)
 
 
-def run_rust_benchmarks():
+def run_rust_benchmarks(args=None):
     """Run the Rust benchmark binary and yield JSON results line-by-line."""
     print("Running Rust benchmarks...")
     
@@ -47,18 +47,18 @@ def run_rust_benchmarks():
         "Benchmark 4c: NAS CG (Conjugate Gradient)": "benchmark_4c_nas_cg.png",
     }
 
+    cmd = ["cargo", "run", "--bin", "benchmarks", "--release"]
+    if args:
+        cmd.extend(args)
+
     try:
         process = subprocess.Popen(
-            ["cargo", "run", "--bin", "benchmarks", "--release"],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1
         )
-        
-        # In a separate thread or just by alternating, we should handle stderr
-        # but for simplicity in this script, we'll focus on stdout lines.
-        # The Rust binary prints mostly to stderr for progress.
         
         import threading
         def print_stderr(pipe):
@@ -80,6 +80,7 @@ def run_rust_benchmarks():
                 system_info = result['system_info']
                 cores = system_info['cpu_cores']
                 ram = round(system_info['total_memory_gb'])
+                strategy = system_info['pinning_strategy']
                 
                 # Get base filename
                 base_filename = filename_map.get(name, f"benchmark_{name.replace(' ', '_').lower()}")
@@ -87,9 +88,9 @@ def run_rust_benchmarks():
                 if base_filename.endswith(".png"):
                     base_filename = base_filename[:-4]
                 
-                filename = f"{base_filename}_{cores}c_{ram}gb.png"
+                filename = f"{base_filename}_{cores}c_{ram}gb_{strategy.lower()}.png"
                 
-                print(f"\nCompleted: {name}")
+                print(f"\nCompleted: {name} (Strategy: {strategy})")
                 if result.get('timed_out'):
                     print(f"  ! Note: Benchmark timed out after 1 minute")
                 
@@ -129,11 +130,12 @@ def create_graph(benchmark_data, output_filename):
     plt.plot(num_tasks, time_ms, 'b-o', linewidth=2, markersize=8)
     plt.xlabel('Number of Tasks', fontsize=12)
     plt.ylabel('Time (ms)', fontsize=12)
-    plt.title(name, fontsize=14, fontweight='bold')
+    plt.title(f"{name}\nStrategy: {system_info['pinning_strategy']}", fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
     
     # Add system info and crash info as text below the plot
     info_text = f"System: {system_info['cpu_cores']} CPU cores, {system_info['total_memory_gb']:.2f} GB RAM"
+    info_text += f"\nPinning Strategy: {system_info['pinning_strategy']}"
     if crashed and crash_point:
         info_text += f"\n! System crashed at {crash_point} tasks"
     
@@ -169,7 +171,7 @@ def main():
     
     # Run benchmarks and generate graphs incrementally
     generated_files = []
-    for name, filename in run_rust_benchmarks():
+    for name, filename in run_rust_benchmarks(sys.argv[1:]):
         generated_files.append((name, filename))
     
     print()

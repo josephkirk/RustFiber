@@ -1,5 +1,5 @@
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo, num_cpus};
-use rustfiber::JobSystem;
+use rustfiber::{JobSystem, PinningStrategy};
 use std::time::Instant;
 
 fn sequential_quicksort(arr: &mut [i32]) {
@@ -9,16 +9,16 @@ fn sequential_quicksort(arr: &mut [i32]) {
     arr.sort();
 }
 
-pub fn run_quicksort_benchmark() -> BenchmarkResult {
+pub fn run_quicksort_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 2: Recursive Task Decomposition (QuickSort) ===");
 
-    let system_info = SystemInfo::collect();
+    let system_info = SystemInfo::collect(strategy);
     eprintln!(
-        "System: {} CPU cores, {:.2} GB total RAM",
-        system_info.cpu_cores, system_info.total_memory_gb
+        "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
+        system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new(num_cpus());
+    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
 
     let test_sizes: Vec<usize> = vec![
         1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000,

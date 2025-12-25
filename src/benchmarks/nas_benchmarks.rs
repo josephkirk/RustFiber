@@ -1,5 +1,5 @@
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo, num_cpus};
-use rustfiber::JobSystem;
+use rustfiber::{JobSystem, PinningStrategy};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -112,16 +112,16 @@ fn run_cg_benchmark(job_system: &JobSystem, matrix_size: usize) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 
-pub fn run_nas_ep_benchmark() -> BenchmarkResult {
+pub fn run_nas_ep_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4a: NAS EP (Embarrassingly Parallel) ===");
 
-    let system_info = SystemInfo::collect();
+    let system_info = SystemInfo::collect(strategy);
     eprintln!(
-        "System: {} CPU cores, {:.2} GB total RAM",
-        system_info.cpu_cores, system_info.total_memory_gb
+        "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
+        system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new(num_cpus());
+    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
 
     let ep_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000];
     let mut data_points = Vec::new();
@@ -159,17 +159,17 @@ pub fn run_nas_ep_benchmark() -> BenchmarkResult {
     }
 }
 
-pub fn run_nas_mg_benchmark() -> BenchmarkResult {
+pub fn run_nas_mg_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4b: NAS MG (Multi-Grid) ===");
 
-    let system_info = SystemInfo::collect();
+    let system_info = SystemInfo::collect(strategy);
     eprintln!(
-        "System: {} CPU cores, {:.2} GB total RAM",
-        system_info.cpu_cores, system_info.total_memory_gb
+        "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
+        system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    // Use affinity-aware job system for better cache locality
-    let job_system = JobSystem::new_with_affinity(num_cpus());
+    // Use specific strategy
+    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
 
     let mg_sizes = vec![50, 100, 150, 200, 250, 300];
     let mut data_points = Vec::new();
@@ -207,16 +207,16 @@ pub fn run_nas_mg_benchmark() -> BenchmarkResult {
     }
 }
 
-pub fn run_nas_cg_benchmark() -> BenchmarkResult {
+pub fn run_nas_cg_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4c: NAS CG (Conjugate Gradient) ===");
 
-    let system_info = SystemInfo::collect();
+    let system_info = SystemInfo::collect(strategy);
     eprintln!(
-        "System: {} CPU cores, {:.2} GB total RAM",
-        system_info.cpu_cores, system_info.total_memory_gb
+        "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
+        system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new(num_cpus());
+    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
 
     let cg_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
     let mut data_points = Vec::new();

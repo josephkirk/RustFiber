@@ -46,6 +46,7 @@ impl JobSystem {
     ///
     /// Each worker thread is pinned to a specific CPU core for better
     /// cache locality and reduced context switching overhead.
+    /// By default uses `PinningStrategy::Linear`.
     ///
     /// # Arguments
     ///
@@ -60,7 +61,27 @@ impl JobSystem {
     /// ```
     pub fn new_with_affinity(num_threads: usize) -> Self {
         JobSystem {
-            worker_pool: WorkerPool::new_with_affinity(num_threads, true),
+            worker_pool: WorkerPool::new_with_strategy(num_threads, crate::PinningStrategy::Linear),
+        }
+    }
+
+    /// Creates a new job system with a specific pinning strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_threads` - Number of worker threads to create
+    /// * `strategy` - The pinning strategy to use
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::{JobSystem, PinningStrategy};
+    ///
+    /// let job_system = JobSystem::new_with_strategy(4, PinningStrategy::AvoidSMT);
+    /// ```
+    pub fn new_with_strategy(num_threads: usize, strategy: crate::PinningStrategy) -> Self {
+        JobSystem {
+            worker_pool: WorkerPool::new_with_strategy(num_threads, strategy),
         }
     }
 

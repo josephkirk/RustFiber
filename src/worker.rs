@@ -4,8 +4,10 @@
 //! They form the foundation of the M:N threading model, where multiple
 //! fibers (jobs) are multiplexed onto a fixed number of worker threads.
 
+use crate::PinningStrategy;
 use crate::fiber::Fiber;
 use crate::job::Job;
+use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -27,15 +29,12 @@ impl Worker {
         stealers: Arc<Vec<Stealer<Job>>>,
         injector: Arc<Injector<Job>>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
-        pin_to_core: bool,
+        core_id: Option<CoreId>,
     ) -> Self {
         let handle = thread::spawn(move || {
-            // Pin worker to its core for better cache locality
-            if pin_to_core
-                && let Some(core_ids) = core_affinity::get_core_ids()
-                && id < core_ids.len()
-            {
-                core_affinity::set_for_current(core_ids[id]);
+            // Pin worker to its core for better cache locality if specified
+            if let Some(core_id) = core_id {
+                core_affinity::set_for_current(core_id);
             }
 
             Worker::run_loop(id, local_queue, stealers, injector, shutdown);
@@ -129,14 +128,23 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Creates a new worker pool with work-stealing queues.
     pub fn new(num_threads: usize) -> Self {
-        Self::new_with_affinity(num_threads, false)
+        Self::new_with_strategy(num_threads, PinningStrategy::None)
     }
 
     /// Creates a new worker pool with optional CPU affinity pinning.
-    ///
-    /// When `pin_to_core` is true, each worker thread is pinned to a specific
-    /// CPU core, which improves cache locality and reduces context switching overhead.
     pub fn new_with_affinity(num_threads: usize, pin_to_core: bool) -> Self {
+        Self::new_with_strategy(
+            num_threads,
+            if pin_to_core {
+                PinningStrategy::Linear
+            } else {
+                PinningStrategy::None
+            },
+        )
+    }
+
+    /// Creates a new worker pool with a specific pinning strategy.
+    pub fn new_with_strategy(num_threads: usize, strategy: PinningStrategy) -> Self {
         let injector = Arc::new(Injector::new());
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut local_queues = Vec::with_capacity(num_threads);
@@ -152,15 +160,47 @@ impl WorkerPool {
         let stealers = Arc::new(stealers);
         let mut workers = Vec::with_capacity(num_threads);
 
-        // Spawn workers with their local queues and stealers
+        // Compute core mapping based on strategy
+        let core_ids = core_affinity::get_core_ids().unwrap_or_default();
+        let mapped_cores: Vec<Option<CoreId>> = match strategy {
+            PinningStrategy::None => vec![None; num_threads],
+            PinningStrategy::Linear => {
+                let mut cores = Vec::with_capacity(num_threads);
+                for i in 0..num_threads {
+                    cores.push(core_ids.get(i % core_ids.len().max(1)).copied());
+                }
+                cores
+            }
+            PinningStrategy::AvoidSMT => {
+                // Pick even-indexed cores (physical)
+                let physical_cores: Vec<_> = core_ids.iter().step_by(2).copied().collect();
+                let mut cores = Vec::with_capacity(num_threads);
+                for i in 0..num_threads {
+                    cores.push(physical_cores.get(i % physical_cores.len().max(1)).copied());
+                }
+                cores
+            }
+            PinningStrategy::CCDIsolation => {
+                // Pin workers to the first 8 physical cores (Logical 0, 2, ..., 14)
+                let ccd1_cores: Vec<_> = core_ids.iter().step_by(2).take(8).copied().collect();
+                let mut cores = Vec::with_capacity(num_threads);
+                for i in 0..num_threads {
+                    cores.push(ccd1_cores.get(i % ccd1_cores.len().max(1)).copied());
+                }
+                cores
+            }
+        };
+
+        // Spawn workers with their local queues, stealers, and core assignments
         for (id, local_queue) in local_queues.into_iter().enumerate() {
+            let core_id = mapped_cores.get(id).copied().flatten();
             workers.push(Worker::new(
                 id,
                 local_queue,
                 Arc::clone(&stealers),
                 Arc::clone(&injector),
                 Arc::clone(&shutdown),
-                pin_to_core,
+                core_id,
             ));
         }
 
