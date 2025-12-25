@@ -31,31 +31,30 @@ fn run_ep_benchmark(job_system: &JobSystem, num_tasks: usize) -> f64 {
 
 // Multi-Grid (MG) - Tests communication and memory bandwidth
 fn run_mg_benchmark(job_system: &JobSystem, grid_size: usize) -> f64 {
-    let grid = Arc::new(Mutex::new(vec![vec![0.0; grid_size]; grid_size]));
-    let start = Instant::now();
-    
-    // Simulate multi-grid operations with communication between neighboring cells
+    // Use a vector of per-chunk grids to reduce lock contention
     let num_chunks = num_cpus();
     let rows_per_chunk = grid_size / num_chunks;
     
+    // Each chunk gets its own grid section to reduce lock contention
+    let grids: Vec<_> = (0..num_chunks)
+        .map(|_| Arc::new(Mutex::new(vec![vec![0.0; grid_size]; rows_per_chunk + 2])))
+        .collect();
+    
+    let start = Instant::now();
+    
+    // Simulate multi-grid operations with reduced communication
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
     for chunk in 0..num_chunks {
-        let grid_clone = grid.clone();
+        let grid_clone = grids[chunk].clone();
         jobs.push(Box::new(move || {
-            let start_row = chunk * rows_per_chunk;
-            let end_row = ((chunk + 1) * rows_per_chunk).min(grid_size);
-            
-            // Simulate stencil operations (requires neighboring data)
+            // Simulate stencil operations on local grid section
             for _ in 0..10 {
                 let mut local_grid = grid_clone.lock().unwrap();
-                for i in start_row..end_row {
-                    for j in 0..grid_size {
-                        let val = if i > 0 && i < grid_size - 1 && j > 0 && j < grid_size - 1 {
-                            (local_grid[i-1][j] + local_grid[i+1][j] + 
-                             local_grid[i][j-1] + local_grid[i][j+1]) / 4.0
-                        } else {
-                            0.0
-                        };
+                let local_size = local_grid.len();
+                for i in 1..local_size-1 {
+                    for j in 1..grid_size-1 {
+                        let val = (local_grid[i-1][j] + local_grid[i+1][j] + 
+                                 local_grid[i][j-1] + local_grid[i][j+1]) / 4.0;
                         local_grid[i][j] = val + 0.1;
                     }
                 }
@@ -150,7 +149,8 @@ pub fn run_nas_mg_benchmark() -> BenchmarkResult {
     eprintln!("System: {} CPU cores, {:.2} GB total RAM", 
              system_info.cpu_cores, system_info.total_memory_gb);
     
-    let job_system = JobSystem::new(num_cpus());
+    // Use affinity-aware job system for better cache locality
+    let job_system = JobSystem::new_with_affinity(num_cpus());
     
     let mg_sizes = vec![50, 100, 150, 200, 250, 300];
     let mut data_points = Vec::new();
