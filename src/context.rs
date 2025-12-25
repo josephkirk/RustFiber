@@ -215,6 +215,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn test_context_spawn_jobs() {
         let job_system = JobSystem::new(4);
         let executed = Arc::new(AtomicUsize::new(0));

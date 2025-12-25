@@ -3,8 +3,8 @@
 //! Jobs are units of work that can be executed by the fiber system.
 //! They encapsulate a closure and associated counter for tracking completion.
 
-use crate::counter::Counter;
 use crate::context::Context;
+use crate::counter::Counter;
 
 /// Internal representation of work to be executed.
 enum Work {
@@ -13,7 +13,7 @@ enum Work {
     /// Closure that requires context, along with JobSystem reference
     WithContext {
         work: Box<dyn FnOnce(&Context) + Send + 'static>,
-        job_system_ptr: usize,  // Store as usize to make it Send
+        job_system_ptr: usize, // Store as usize to make it Send
     },
 }
 
@@ -91,7 +91,7 @@ impl Job {
                     job_system_ptr % std::mem::align_of::<crate::job_system::JobSystem>() == 0,
                     "JobSystem pointer must be properly aligned"
                 );
-                
+
                 unsafe {
                     let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
                     let context = Context::new(job_system);
