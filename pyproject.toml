@@ -1,0 +1,11 @@
+[project]
+name = "rustfiber-benchmarks"
+version = "0.1.0"
+description = "Benchmark visualization for RustFiber job system"
+requires-python = ">=3.8"
+dependencies = [
+    "matplotlib>=3.5.0",
+]
+
+[project.scripts]
+run-benchmarks = "run_benchmarks:main"

@@ -46,6 +46,28 @@ cargo run --release
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation on the design, implementation, and usage.
 
+See [BENCHMARKS.md](BENCHMARKS.md) for information about running performance benchmarks.
+
+## Benchmarks
+
+Run comprehensive performance benchmarks:
+
+```bash
+# Using Python with uv (recommended)
+uv run run_benchmarks.py
+
+# Or with regular Python
+python3 run_benchmarks.py
+```
+
+This will test the system with:
+1. **Million Tiny Tasks (Fibonacci)** - Task creation and scheduling efficiency
+2. **Recursive Task Decomposition (QuickSort)** - Work-stealing efficiency
+3. **Producer-Consumer Stress Test** - Throughput under contention
+4. **NAS Parallel Benchmarks** - Real-world computational patterns (EP, MG, CG)
+
+Benchmark results and graphs are saved to the `docs/` folder.
+
 ## Performance
 
 Typical performance on modern multi-core systems:
