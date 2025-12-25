@@ -11,6 +11,7 @@ A high-performance fiber-based job system implementation in Rust, following the 
 ## Features
 
 - **Parallel Job Execution**: Efficiently schedule work across multiple CPU cores
+- **Nested Parallelism**: Jobs can spawn child jobs using Context for recursive decomposition
 - **Counter-Based Synchronization**: Track job completion without blocking
 - **Thread-Safe**: Built on Rust's ownership model and proven concurrency primitives
 - **High Throughput**: Capable of processing millions of jobs per second
@@ -30,6 +31,35 @@ let counter = job_system.run(|| {
 });
 
 // Wait for completion
+job_system.wait_for_counter(&counter);
+job_system.shutdown();
+```
+
+### Nested Parallelism with Context
+
+```rust
+use rustfiber::JobSystem;
+
+let job_system = JobSystem::new(4);
+
+// Jobs can spawn child jobs for recursive decomposition
+let counter = job_system.run_with_context(|ctx| {
+    // Subdivide work across multiple child jobs
+    let mut counters = vec![];
+    
+    for i in 0..4 {
+        let child = ctx.spawn_job(move |_| {
+            println!("Child job {} running", i);
+        });
+        counters.push(child);
+    }
+    
+    // Wait for all children to complete
+    for child in counters {
+        ctx.wait_for(&child);
+    }
+});
+
 job_system.wait_for_counter(&counter);
 job_system.shutdown();
 ```
