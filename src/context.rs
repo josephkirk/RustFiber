@@ -87,14 +87,13 @@ impl<'a> Context<'a> {
     /// # Example
     ///
     /// ```no_run
-    /// use rustfiber::JobSystem;
+    /// use rustfiber::{JobSystem, Context};
     ///
     /// let job_system = JobSystem::new(4);
     /// let counter = job_system.run_with_context(|ctx| {
-    ///     let jobs: Vec<Box<dyn FnOnce(&_) + Send>> = vec![
-    ///         Box::new(|_| println!("Job 1")),
-    ///         Box::new(|_| println!("Job 2")),
-    ///     ];
+    ///     let mut jobs: Vec<Box<dyn FnOnce(&Context) + Send>> = Vec::new();
+    ///     jobs.push(Box::new(|_ctx| println!("Job 1")));
+    ///     jobs.push(Box::new(|_ctx| println!("Job 2")));
     ///     let children = ctx.spawn_jobs(jobs);
     ///     ctx.wait_for(&children);
     /// });

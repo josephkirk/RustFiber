@@ -225,14 +225,13 @@ impl JobSystem {
     /// # Example
     ///
     /// ```no_run
-    /// use rustfiber::JobSystem;
+    /// use rustfiber::{JobSystem, Context};
     ///
     /// let job_system = JobSystem::new(4);
-    /// let jobs: Vec<Box<dyn FnOnce(&_) + Send>> = vec![
-    ///     Box::new(|ctx| println!("Job 1")),
-    ///     Box::new(|ctx| println!("Job 2")),
-    ///     Box::new(|ctx| println!("Job 3")),
-    /// ];
+    /// let mut jobs: Vec<Box<dyn FnOnce(&Context) + Send>> = Vec::new();
+    /// jobs.push(Box::new(|_ctx| println!("Job 1")));
+    /// jobs.push(Box::new(|_ctx| println!("Job 2")));
+    /// jobs.push(Box::new(|_ctx| println!("Job 3")));
     /// let counter = job_system.run_multiple_with_context(jobs);
     /// job_system.wait_for_counter(&counter);
     /// ```
