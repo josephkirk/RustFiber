@@ -21,11 +21,11 @@
 //! use rustfiber::JobSystem;
 //!
 //! let job_system = JobSystem::new(4); // 4 worker threads
-//! 
+//!
 //! let counter = job_system.run(|| {
 //!     println!("Hello from a fiber job!");
 //! });
-//! 
+//!
 //! job_system.wait_for_counter(&counter);
 //! ```
 

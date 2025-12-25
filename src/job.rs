@@ -42,7 +42,7 @@ impl Job {
     /// Executes the job and decrements its counter if present.
     pub fn execute(self) {
         (self.work)();
-        
+
         if let Some(counter) = self.counter {
             counter.decrement();
         }
@@ -52,8 +52,8 @@ impl Job {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn test_job_execution() {

@@ -85,10 +85,8 @@ impl JobSystem {
         let counter_clone = counter.clone();
 
         let job = Job::with_counter(work, counter_clone);
-        
-        self.worker_pool
-            .submit(job)
-            .expect("Failed to submit job");
+
+        self.worker_pool.submit(job).expect("Failed to submit job");
 
         counter
     }
@@ -123,9 +121,7 @@ impl JobSystem {
         for work in jobs_vec {
             let counter_clone = counter.clone();
             let job = Job::with_counter(work, counter_clone);
-            self.worker_pool
-                .submit(job)
-                .expect("Failed to submit job");
+            self.worker_pool.submit(job).expect("Failed to submit job");
         }
 
         counter
@@ -156,7 +152,7 @@ impl JobSystem {
         // Use a backoff strategy to reduce CPU usage
         let mut backoff_us = 1;
         const MAX_BACKOFF_US: u64 = 1000; // Max 1ms backoff
-        
+
         while !counter.is_complete() {
             thread::sleep(Duration::from_micros(backoff_us));
             // Exponential backoff up to max
@@ -173,7 +169,8 @@ impl JobSystem {
     ///
     /// Returns Ok if shutdown was successful, or Err if any worker threads panicked.
     pub fn shutdown(self) -> Result<(), String> {
-        self.worker_pool.shutdown()
+        self.worker_pool
+            .shutdown()
             .map_err(|count| format!("{} worker thread(s) panicked", count))
     }
 }
@@ -187,8 +184,8 @@ impl Default for JobSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_job_system_creation() {
@@ -219,7 +216,7 @@ mod tests {
 
         let num_jobs = 10;
         let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        
+
         for _ in 0..num_jobs {
             let executed_clone = executed.clone();
             jobs.push(Box::new(move || {
@@ -243,7 +240,7 @@ mod tests {
         let counter = job_system.run(move || {
             // Simulate nested job submission
             result_clone.fetch_add(1, Ordering::SeqCst);
-            
+
             // In a real system, this would submit more jobs
             for _ in 0..5 {
                 result_clone.fetch_add(1, Ordering::SeqCst);

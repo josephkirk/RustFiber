@@ -33,17 +33,9 @@ impl Worker {
 
     /// Main execution loop for the worker thread.
     fn run_loop(_id: usize, receiver: Receiver<Job>) {
-        loop {
-            match receiver.recv() {
-                Ok(job) => {
-                    let fiber = Fiber::new(job);
-                    fiber.run();
-                }
-                Err(_) => {
-                    // Channel closed, worker should exit
-                    break;
-                }
-            }
+        while let Ok(job) = receiver.recv() {
+            let fiber = Fiber::new(job);
+            fiber.run();
         }
     }
 
@@ -103,12 +95,12 @@ impl WorkerPool {
         let mut failed_count = 0;
         for worker in self.workers {
             let worker_id = worker.id();
-            if let Err(_) = worker.join() {
+            if worker.join().is_err() {
                 failed_count += 1;
                 eprintln!("Worker {} panicked during execution", worker_id);
             }
         }
-        
+
         if failed_count > 0 {
             Err(failed_count)
         } else {
@@ -121,8 +113,8 @@ impl WorkerPool {
 mod tests {
     use super::*;
     use crate::counter::Counter;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[test]

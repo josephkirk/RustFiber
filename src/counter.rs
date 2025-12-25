@@ -4,8 +4,8 @@
 //! They track the number of incomplete jobs and allow fibers to efficiently
 //! wait for job completion without blocking worker threads.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A thread-safe counter for tracking job completion.
 ///

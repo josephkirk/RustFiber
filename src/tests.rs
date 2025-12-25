@@ -1,10 +1,10 @@
 //! Integration tests for the fiber-based job system.
 
 use crate::{Counter, JobSystem};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+use std::time::Duration;
 
 #[test]
 fn test_basic_job_execution() {
@@ -25,10 +25,10 @@ fn test_basic_job_execution() {
 fn test_parallel_job_execution() {
     let job_system = JobSystem::new(4);
     let sum = Arc::new(AtomicUsize::new(0));
-    
+
     let num_jobs = 100;
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-    
+
     for i in 0..num_jobs {
         let sum_clone = sum.clone();
         jobs.push(Box::new(move || {
@@ -48,7 +48,7 @@ fn test_parallel_job_execution() {
 fn test_counter_synchronization() {
     let job_system = JobSystem::new(4);
     let counter = Counter::new(10);
-    
+
     for _ in 0..10 {
         let counter_clone = counter.clone();
         job_system.run(move || {
@@ -71,7 +71,7 @@ fn test_high_throughput() {
     let job_system = JobSystem::new(8);
     let num_jobs = 1000;
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-    
+
     for _ in 0..num_jobs {
         jobs.push(Box::new(|| {
             // Simulate some work
@@ -84,7 +84,7 @@ fn test_high_throughput() {
 
     let counter = job_system.run_multiple(jobs);
     job_system.wait_for_counter(&counter);
-    
+
     assert!(counter.is_complete());
     job_system.shutdown().expect("Shutdown failed");
 }

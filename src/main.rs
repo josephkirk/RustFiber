@@ -1,6 +1,6 @@
 use rustfiber::JobSystem;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 fn main() {
@@ -9,7 +9,10 @@ fn main() {
     // Create a job system with 4 worker threads
     let num_threads = 4;
     let job_system = JobSystem::new(num_threads);
-    println!("Initialized job system with {} worker threads\n", num_threads);
+    println!(
+        "Initialized job system with {} worker threads\n",
+        num_threads
+    );
 
     // Example 1: Simple job execution
     println!("Example 1: Simple job execution");
@@ -23,10 +26,10 @@ fn main() {
     println!("Example 2: Parallel computation");
     let sum = Arc::new(AtomicUsize::new(0));
     let num_jobs = 100;
-    
+
     let start = Instant::now();
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-    
+
     for i in 0..num_jobs {
         let sum_clone = sum.clone();
         jobs.push(Box::new(move || {
@@ -41,17 +44,21 @@ fn main() {
 
     let counter = job_system.run_multiple(jobs);
     job_system.wait_for_counter(&counter);
-    
+
     let duration = start.elapsed();
     let expected_sum: usize = (0..num_jobs).sum();
     println!("  Executed {} jobs in {:?}", num_jobs, duration);
-    println!("  Sum result: {} (expected: {})\n", sum.load(Ordering::SeqCst), expected_sum);
+    println!(
+        "  Sum result: {} (expected: {})\n",
+        sum.load(Ordering::SeqCst),
+        expected_sum
+    );
 
     // Example 3: High-throughput test
     println!("Example 3: High-throughput benchmark");
     let num_jobs = 10000;
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-    
+
     let start = Instant::now();
     for _ in 0..num_jobs {
         jobs.push(Box::new(|| {
@@ -65,7 +72,7 @@ fn main() {
 
     let counter = job_system.run_multiple(jobs);
     job_system.wait_for_counter(&counter);
-    
+
     let duration = start.elapsed();
     let jobs_per_second = num_jobs as f64 / duration.as_secs_f64();
     println!("  Executed {} jobs in {:?}", num_jobs, duration);
