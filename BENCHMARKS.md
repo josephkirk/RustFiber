@@ -1,6 +1,6 @@
 # RustFiber Benchmarks
 
-This directory contains benchmark scripts that test the RustFiber job system with various stress tests.
+This directory contains benchmark scripts that test the RustFiber job system with various stress tests, now optimized with thread pinning strategies.
 
 ## Benchmarks
 
@@ -16,51 +16,53 @@ This directory contains benchmark scripts that test the RustFiber job system wit
 
 ### With Python (uv recommended)
 
+The benchmark runner supports selecting a **Pinning Strategy** to optimize for different CPU architectures (e.g., AMD Ryzen CCD isolation).
+
 ```bash
 # Using uv (recommended)
-uv run run_benchmarks.py
+uv run run_benchmarks.py [strategy]
 
-# Or with regular Python
-python3 run_benchmarks.py
+# Examples:
+uv run run_benchmarks.py linear         # Worker i -> Core i (Default)
+uv run run_benchmarks.py avoid-smt     # Worker i -> Physical Core i (Even logic processors)
+uv run run_benchmarks.py ccd-isolation # Restricted to CCD1 (Logical 0-14, step 2)
+uv run run_benchmarks.py none          # Standard OS scheduling
 ```
 
 The script will:
-1. Build and run the Rust benchmark binary
-2. Capture JSON output with timing data
-3. Generate PNG graphs in the `docs/` folder
+1. Build and run the Rust benchmark binary with the selected strategy.
+2. **Stream results**: JSON data is processed line-by-line as benchmarks complete.
+3. **Incremental Graphing**: PNG graphs are generated immediately after each test.
+4. **Timeout**: Each benchmark has a strict **1-minute timeout** to prevent hangs.
 
 ### Manual Execution
 
 You can also run the Rust benchmarks directly:
 
 ```bash
-cargo run --bin benchmarks --release > benchmark_results.json
+cargo run --bin benchmarks --release -- [strategy]
 ```
-
-Then process the JSON output manually.
 
 ## Output
 
-The benchmarks generate the following PNG graphs in `docs/`:
+The benchmarks generate PNG graphs in `docs/` with descriptive filenames:
+Format: `benchmark_[NAME]_[CORES]c_[RAM]gb_[STRATEGY].png`
 
-- `benchmark_1_fibonacci.png`
-- `benchmark_2_quicksort.png`
-- `benchmark_3_producer_consumer.png`
-- `benchmark_4a_nas_ep.png`
-- `benchmark_4b_nas_mg.png`
-- `benchmark_4c_nas_cg.png`
+Example: `benchmark_1_fibonacci_32c_95gb_ccdisolation.png`
 
 Each graph shows:
 - X-axis: Number of tasks
 - Y-axis: Execution time in milliseconds
-- System information (CPU cores, RAM)
-- Crash point (if system crashed during testing)
+- **Title**: Benchmark Name + Selected Pinning Strategy
+- **Info Box**: CPU cores, RAM, and pinning strategy details
+- **Status Overlay**: "Benchmark timed out" or "System crashed" if applicable
 
 ## Requirements
 
 - Rust (for building the benchmark binary)
 - Python 3.8+ (for graph generation)
 - matplotlib (Python package)
+- sysinfo (Rust crate, for hardware detection)
 
 Install Python dependencies:
 
