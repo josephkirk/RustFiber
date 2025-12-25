@@ -73,6 +73,8 @@ fn main() {
 
     // Shutdown the system
     println!("Shutting down job system...");
-    job_system.shutdown();
-    println!("Done!");
+    match job_system.shutdown() {
+        Ok(_) => println!("Done!"),
+        Err(e) => eprintln!("Shutdown error: {}", e),
+    }
 }

@@ -18,7 +18,7 @@ fn test_basic_job_execution() {
 
     job_system.wait_for_counter(&counter);
     assert_eq!(value.load(Ordering::SeqCst), 42);
-    job_system.shutdown();
+    job_system.shutdown().expect("Shutdown failed");
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn test_parallel_job_execution() {
 
     let expected_sum: usize = (0..num_jobs).sum();
     assert_eq!(sum.load(Ordering::SeqCst), expected_sum);
-    job_system.shutdown();
+    job_system.shutdown().expect("Shutdown failed");
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn test_counter_synchronization() {
     }
 
     assert!(counter.is_complete());
-    job_system.shutdown();
+    job_system.shutdown().expect("Shutdown failed");
 }
 
 #[test]
@@ -86,5 +86,5 @@ fn test_high_throughput() {
     job_system.wait_for_counter(&counter);
     
     assert!(counter.is_complete());
-    job_system.shutdown();
+    job_system.shutdown().expect("Shutdown failed");
 }

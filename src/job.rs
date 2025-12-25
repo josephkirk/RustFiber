@@ -4,7 +4,6 @@
 //! They encapsulate a closure and associated counter for tracking completion.
 
 use crate::counter::Counter;
-use std::sync::Arc;
 
 /// A unit of work to be executed by the job system.
 ///
@@ -50,50 +49,11 @@ impl Job {
     }
 }
 
-/// A shareable job descriptor that can be cloned and distributed.
-#[derive(Clone)]
-pub struct JobDescriptor {
-    work: Arc<dyn Fn() + Send + Sync + 'static>,
-    counter: Option<Counter>,
-}
-
-impl JobDescriptor {
-    /// Creates a new job descriptor with the given work function.
-    pub fn new<F>(work: F) -> Self
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        JobDescriptor {
-            work: Arc::new(work),
-            counter: None,
-        }
-    }
-
-    /// Creates a new job descriptor with an associated counter.
-    pub fn with_counter<F>(work: F, counter: Counter) -> Self
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        JobDescriptor {
-            work: Arc::new(work),
-            counter: Some(counter),
-        }
-    }
-
-    /// Executes the job and decrements its counter if present.
-    pub fn execute(&self) {
-        (self.work)();
-        
-        if let Some(ref counter) = self.counter {
-            counter.decrement();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn test_job_execution() {
@@ -123,18 +83,5 @@ mod tests {
         assert_eq!(counter.value(), 1);
         job.execute();
         assert_eq!(counter.value(), 0);
-    }
-
-    #[test]
-    fn test_job_descriptor() {
-        let executed = Arc::new(AtomicBool::new(false));
-        let executed_clone = executed.clone();
-
-        let descriptor = JobDescriptor::new(move || {
-            executed_clone.store(true, Ordering::SeqCst);
-        });
-
-        descriptor.execute();
-        assert!(executed.load(Ordering::SeqCst));
     }
 }

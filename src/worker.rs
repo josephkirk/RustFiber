@@ -92,13 +92,27 @@ impl WorkerPool {
     }
 
     /// Shuts down the worker pool and waits for all threads to finish.
-    pub fn shutdown(self) {
+    ///
+    /// Returns Ok if all workers shut down successfully, or Err with the
+    /// number of workers that panicked.
+    pub fn shutdown(self) -> Result<(), usize> {
         // Drop the sender to close the channel
         drop(self.sender);
 
-        // Wait for all workers to finish
+        // Wait for all workers to finish and track failures
+        let mut failed_count = 0;
         for worker in self.workers {
-            let _ = worker.join();
+            let worker_id = worker.id();
+            if let Err(_) = worker.join() {
+                failed_count += 1;
+                eprintln!("Worker {} panicked during execution", worker_id);
+            }
+        }
+        
+        if failed_count > 0 {
+            Err(failed_count)
+        } else {
+            Ok(())
         }
     }
 }
@@ -115,7 +129,7 @@ mod tests {
     fn test_worker_pool_creation() {
         let pool = WorkerPool::new(4);
         assert_eq!(pool.size(), 4);
-        pool.shutdown();
+        pool.shutdown().expect("Shutdown failed");
     }
 
     #[test]
@@ -136,7 +150,7 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
 
         assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
-        pool.shutdown();
+        pool.shutdown().expect("Shutdown failed");
     }
 
     #[test]
@@ -161,6 +175,6 @@ mod tests {
         }
 
         assert!(counter.is_complete());
-        pool.shutdown();
+        pool.shutdown().expect("Shutdown failed");
     }
 }

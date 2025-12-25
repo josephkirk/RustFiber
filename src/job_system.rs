@@ -51,7 +51,7 @@ impl JobSystem {
     ///
     /// let job_system = JobSystem::default();
     /// ```
-    pub fn default() -> Self {
+    pub fn with_default_threads() -> Self {
         let num_cpus = thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
@@ -133,8 +133,9 @@ impl JobSystem {
 
     /// Waits for a counter to reach zero (all tracked jobs completed).
     ///
-    /// This is a busy-wait implementation. In a production system,
-    /// this would use condition variables or fiber yielding for efficiency.
+    /// Note: This uses a simple polling approach with sleep. In a production
+    /// system, this would be enhanced with condition variables or fiber yielding
+    /// for better efficiency.
     ///
     /// # Arguments
     ///
@@ -152,8 +153,14 @@ impl JobSystem {
     /// job_system.wait_for_counter(&counter);
     /// ```
     pub fn wait_for_counter(&self, counter: &Counter) {
+        // Use a backoff strategy to reduce CPU usage
+        let mut backoff_us = 1;
+        const MAX_BACKOFF_US: u64 = 1000; // Max 1ms backoff
+        
         while !counter.is_complete() {
-            thread::sleep(Duration::from_micros(100));
+            thread::sleep(Duration::from_micros(backoff_us));
+            // Exponential backoff up to max
+            backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
         }
     }
 
@@ -163,8 +170,17 @@ impl JobSystem {
     }
 
     /// Shuts down the job system, waiting for all jobs to complete.
-    pub fn shutdown(self) {
-        self.worker_pool.shutdown();
+    ///
+    /// Returns Ok if shutdown was successful, or Err if any worker threads panicked.
+    pub fn shutdown(self) -> Result<(), String> {
+        self.worker_pool.shutdown()
+            .map_err(|count| format!("{} worker thread(s) panicked", count))
+    }
+}
+
+impl Default for JobSystem {
+    fn default() -> Self {
+        JobSystem::with_default_threads()
     }
 }
 
@@ -178,7 +194,7 @@ mod tests {
     fn test_job_system_creation() {
         let job_system = JobSystem::new(4);
         assert_eq!(job_system.num_workers(), 4);
-        job_system.shutdown();
+        job_system.shutdown().expect("Shutdown failed");
     }
 
     #[test]
@@ -193,7 +209,7 @@ mod tests {
 
         job_system.wait_for_counter(&counter);
         assert_eq!(executed.load(Ordering::SeqCst), 1);
-        job_system.shutdown();
+        job_system.shutdown().expect("Shutdown failed");
     }
 
     #[test]
@@ -215,7 +231,7 @@ mod tests {
         job_system.wait_for_counter(&counter);
 
         assert_eq!(executed.load(Ordering::SeqCst), num_jobs);
-        job_system.shutdown();
+        job_system.shutdown().expect("Shutdown failed");
     }
 
     #[test]
@@ -236,6 +252,6 @@ mod tests {
 
         job_system.wait_for_counter(&counter);
         assert_eq!(result.load(Ordering::SeqCst), 6);
-        job_system.shutdown();
+        job_system.shutdown().expect("Shutdown failed");
     }
 }
