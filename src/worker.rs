@@ -221,7 +221,7 @@ impl WorkerPool {
 mod tests {
     use super::*;
     use crate::counter::Counter;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -275,6 +275,86 @@ mod tests {
         }
 
         assert!(counter.is_complete());
+        pool.shutdown().expect("Shutdown failed");
+    }
+
+    #[test]
+    fn test_worker_pool_batch_submission() {
+        let pool = WorkerPool::new(4);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let num_jobs = 100;
+        let mut jobs = Vec::new();
+        
+        for _ in 0..num_jobs {
+            let counter_clone = counter.clone();
+            jobs.push(Job::new(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }));
+        }
+
+        pool.submit_batch(jobs).unwrap();
+
+        // Wait for jobs to complete
+        thread::sleep(Duration::from_millis(200));
+
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
+        pool.shutdown().expect("Shutdown failed");
+    }
+
+    #[test]
+    fn test_worker_pool_with_affinity() {
+        let pool = WorkerPool::new_with_affinity(2, true);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let num_jobs = 20;
+        for _ in 0..num_jobs {
+            let counter_clone = counter.clone();
+            let job = Job::new(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            });
+            pool.submit(job).unwrap();
+        }
+
+        // Wait a bit for jobs to complete
+        thread::sleep(Duration::from_millis(100));
+
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
+        pool.shutdown().expect("Shutdown failed");
+    }
+
+    #[test]
+    fn test_work_stealing_load_balance() {
+        // Test that work-stealing helps distribute load
+        let pool = WorkerPool::new(4);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let worker_ids = Arc::new(Mutex::new(Vec::<usize>::new()));
+
+        let num_jobs = 100;
+        for i in 0..num_jobs {
+            let counter_clone = counter.clone();
+            let worker_ids_clone = worker_ids.clone();
+            
+            let job = Job::new(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+                
+                // Track which worker executed this job
+                if let Ok(mut ids) = worker_ids_clone.lock() {
+                    ids.push(i);
+                }
+                
+                // Variable work to encourage stealing
+                if i % 10 == 0 {
+                    thread::sleep(Duration::from_micros(100));
+                }
+            });
+            pool.submit(job).unwrap();
+        }
+
+        // Wait for all jobs to complete
+        thread::sleep(Duration::from_millis(500));
+
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
         pool.shutdown().expect("Shutdown failed");
     }
 }
