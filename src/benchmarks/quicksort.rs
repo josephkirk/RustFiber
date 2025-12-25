@@ -31,7 +31,10 @@ pub fn run_quicksort_benchmark() -> BenchmarkResult {
 
     for &array_size in &test_sizes {
         if total_start.elapsed() > timeout_duration {
-            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            eprintln!(
+                "\n! Timeout reached ({}s), stopping benchmark.",
+                crate::utils::DEFAULT_TIMEOUT_SECS
+            );
             timed_out = true;
             break;
         }

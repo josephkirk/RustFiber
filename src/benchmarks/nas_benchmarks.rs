@@ -131,7 +131,10 @@ pub fn run_nas_ep_benchmark() -> BenchmarkResult {
 
     for &size in &ep_sizes {
         if total_start.elapsed() > timeout_duration {
-            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            eprintln!(
+                "\n! Timeout reached ({}s), stopping benchmark.",
+                crate::utils::DEFAULT_TIMEOUT_SECS
+            );
             timed_out = true;
             break;
         }
@@ -176,7 +179,10 @@ pub fn run_nas_mg_benchmark() -> BenchmarkResult {
 
     for &size in &mg_sizes {
         if total_start.elapsed() > timeout_duration {
-            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            eprintln!(
+                "\n! Timeout reached ({}s), stopping benchmark.",
+                crate::utils::DEFAULT_TIMEOUT_SECS
+            );
             timed_out = true;
             break;
         }
@@ -220,7 +226,10 @@ pub fn run_nas_cg_benchmark() -> BenchmarkResult {
 
     for &size in &cg_sizes {
         if total_start.elapsed() > timeout_duration {
-            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            eprintln!(
+                "\n! Timeout reached ({}s), stopping benchmark.",
+                crate::utils::DEFAULT_TIMEOUT_SECS
+            );
             timed_out = true;
             break;
         }
