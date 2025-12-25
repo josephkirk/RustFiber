@@ -62,9 +62,15 @@ python3 run_benchmarks.py
 
 This will test the system with:
 1. **Million Tiny Tasks (Fibonacci)** - Task creation and scheduling efficiency
-2. **Recursive Task Decomposition (QuickSort)** - Work-stealing efficiency
-3. **Producer-Consumer Stress Test** - Throughput under contention
-4. **NAS Parallel Benchmarks** - Real-world computational patterns (EP, MG, CG)
+   ![Fibonacci](./docs/benchmark_1_fibonacci.png)
+3. **Recursive Task Decomposition (QuickSort)** - Work-stealing efficiency
+   ![QuickSort](./docs/benchmark_2_quicksort.png)
+5. **Producer-Consumer Stress Test** - Throughput under contention
+   ![ProducerCosumer](./docs/benchmark_3_producer_consumer.png)
+7. **NAS Parallel Benchmarks** - Real-world computational patterns (EP, MG, CG)
+   ![EP](./docs/benchmark_4a_nas_ep.png)
+   ![EP](./docs/benchmark_4b_nas_mg.png)
+   ![EP](./docs/benchmark_4c_nas_cg.png)
 
 Benchmark results and graphs are saved to the `docs/` folder.
 
