@@ -85,6 +85,13 @@ impl Job {
             } => {
                 // SAFETY: The JobSystem is guaranteed to outlive the jobs it creates.
                 // Jobs are executed before JobSystem::shutdown() completes.
+                // Debug assertion to catch any corruption in development.
+                debug_assert_ne!(job_system_ptr, 0, "JobSystem pointer cannot be null");
+                debug_assert!(
+                    job_system_ptr % std::mem::align_of::<crate::job_system::JobSystem>() == 0,
+                    "JobSystem pointer must be properly aligned"
+                );
+                
                 unsafe {
                     let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
                     let context = Context::new(job_system);

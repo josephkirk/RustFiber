@@ -29,8 +29,8 @@ fn test_particle_system_like_subdivision() {
                 // Simulate processing particles in this chunk
                 for _ in 0..chunk_size {
                     processed.fetch_add(1, Ordering::SeqCst);
-                    // Simulate particle update work
-                    std::thread::sleep(Duration::from_micros(10));
+                    // Simulate particle update work (reduced for faster tests)
+                    std::thread::sleep(Duration::from_micros(1));
                 }
             });
             counters.push(counter);
@@ -106,8 +106,8 @@ fn test_producer_consumer_pattern() {
             let consumed_clone = consumed.clone();
             
             let consumer = ctx.spawn_job(move |_ctx| {
-                // Simulate consuming/processing the item
-                std::thread::sleep(Duration::from_micros(100));
+                // Simulate consuming/processing the item (reduced for faster tests)
+                std::thread::sleep(Duration::from_micros(10));
                 consumed_clone.fetch_add(1, Ordering::SeqCst);
             });
             consumer_counters.push(consumer);
