@@ -1,13 +1,13 @@
 pub mod fibonacci;
-pub mod quicksort;
-pub mod producer_consumer;
 pub mod nas_benchmarks;
+pub mod producer_consumer;
+pub mod quicksort;
 pub mod utils;
 
 use fibonacci::run_fibonacci_benchmark;
-use quicksort::run_quicksort_benchmark;
+use nas_benchmarks::{run_nas_cg_benchmark, run_nas_ep_benchmark, run_nas_mg_benchmark};
 use producer_consumer::run_producer_consumer_benchmark;
-use nas_benchmarks::{run_nas_ep_benchmark, run_nas_mg_benchmark, run_nas_cg_benchmark};
+use quicksort::run_quicksort_benchmark;
 
 fn main() {
     eprintln!("=======================================================");
@@ -20,21 +20,21 @@ fn main() {
     eprintln!("3. Producer-Consumer Stress Test");
     eprintln!("4. NAS Parallel Benchmarks (EP, MG, CG)");
     eprintln!("\n=======================================================\n");
-    
+
     // Run all benchmarks and collect results
-    let mut results = Vec::new();
-    
-    results.push(run_fibonacci_benchmark());
-    results.push(run_quicksort_benchmark());
-    results.push(run_producer_consumer_benchmark());
-    results.push(run_nas_ep_benchmark());
-    results.push(run_nas_mg_benchmark());
-    results.push(run_nas_cg_benchmark());
-    
+    let results = vec![
+        run_fibonacci_benchmark(),
+        run_quicksort_benchmark(),
+        run_producer_consumer_benchmark(),
+        run_nas_ep_benchmark(),
+        run_nas_mg_benchmark(),
+        run_nas_cg_benchmark(),
+    ];
+
     eprintln!("\n=======================================================");
     eprintln!("         All Benchmarks Completed!");
     eprintln!("=======================================================\n");
-    
+
     // Output results as JSON to stdout
     match serde_json::to_string_pretty(&results) {
         Ok(json) => println!("{}", json),
