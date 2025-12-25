@@ -5,6 +5,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo, num_cpus};
 
+/// Batch size for producer job submissions to reduce lock contention.
+/// Based on benchmark analysis, batching 32 items at a time provides
+/// a good balance between lock overhead reduction and memory locality.
+const PRODUCER_BATCH_SIZE: usize = 32;
+
 pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
     eprintln!("\n=== Benchmark 3: Producer-Consumer Stress Test ===");
     
@@ -31,7 +36,7 @@ pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
         
         let start = Instant::now();
         
-        // Create producer jobs
+        // Create producer jobs with batching to reduce lock contention
         let num_producers = num_cpus() / 2;
         let items_per_producer = num_items / num_producers;
         
@@ -41,11 +46,21 @@ pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
             let produced_clone = produced.clone();
             
             producer_jobs.push(Box::new(move || {
+                // Process items in batches to reduce lock overhead
+                let mut batch = Vec::with_capacity(PRODUCER_BATCH_SIZE);
                 for i in 0..items_per_producer {
-                    let mut q = queue_clone.lock().unwrap();
-                    q.push_back(i);
-                    drop(q); // Release lock
-                    produced_clone.fetch_add(1, Ordering::SeqCst);
+                    batch.push(i);
+                    
+                    if batch.len() >= PRODUCER_BATCH_SIZE || i == items_per_producer - 1 {
+                        // Push batch to queue with single lock acquisition
+                        let count = batch.len();
+                        let mut q = queue_clone.lock().unwrap();
+                        for item in batch.drain(..) {
+                            q.push_back(item);
+                        }
+                        drop(q);
+                        produced_clone.fetch_add(count, Ordering::SeqCst);
+                    }
                 }
             }));
         }

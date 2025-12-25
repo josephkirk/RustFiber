@@ -65,11 +65,20 @@ impl Worker {
             // Try to get a job from the local queue first
             let job = local_queue.pop().or_else(|| {
                 // If local queue is empty, try to steal from the global injector
+                let mut retry_count = 0;
+                const MAX_RETRIES: usize = 3;
+                
                 loop {
                     match injector.steal_batch_and_pop(&local_queue) {
                         crossbeam::deque::Steal::Success(job) => return Some(job),
                         crossbeam::deque::Steal::Empty => break,
-                        crossbeam::deque::Steal::Retry => continue,
+                        crossbeam::deque::Steal::Retry => {
+                            retry_count += 1;
+                            if retry_count >= MAX_RETRIES {
+                                std::thread::yield_now();
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -164,17 +173,15 @@ impl WorkerPool {
     }
 
     /// Submits a single job to the global injector.
-    pub fn submit(&self, job: Job) -> Result<(), String> {
+    pub fn submit(&self, job: Job) {
         self.injector.push(job);
-        Ok(())
     }
 
     /// Submits multiple jobs in a batch to reduce contention.
-    pub fn submit_batch(&self, jobs: Vec<Job>) -> Result<(), String> {
+    pub fn submit_batch(&self, jobs: Vec<Job>) {
         for job in jobs {
             self.injector.push(job);
         }
-        Ok(())
     }
 
     /// Returns the number of worker threads in the pool.
@@ -243,7 +250,7 @@ mod tests {
             let job = Job::new(move || {
                 counter_clone.fetch_add(1, Ordering::SeqCst);
             });
-            pool.submit(job).unwrap();
+            pool.submit(job);
         }
 
         // Wait a bit for jobs to complete
@@ -266,7 +273,7 @@ mod tests {
                 },
                 counter_clone,
             );
-            pool.submit(job).unwrap();
+            pool.submit(job);
         }
 
         // Wait for jobs to complete
@@ -293,7 +300,7 @@ mod tests {
             }));
         }
 
-        pool.submit_batch(jobs).unwrap();
+        pool.submit_batch(jobs);
 
         // Wait for jobs to complete
         thread::sleep(Duration::from_millis(200));
@@ -313,7 +320,7 @@ mod tests {
             let job = Job::new(move || {
                 counter_clone.fetch_add(1, Ordering::SeqCst);
             });
-            pool.submit(job).unwrap();
+            pool.submit(job);
         }
 
         // Wait a bit for jobs to complete
@@ -348,7 +355,7 @@ mod tests {
                     thread::sleep(Duration::from_micros(100));
                 }
             });
-            pool.submit(job).unwrap();
+            pool.submit(job);
         }
 
         // Wait for all jobs to complete

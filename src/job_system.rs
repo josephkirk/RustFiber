@@ -108,7 +108,7 @@ impl JobSystem {
 
         let job = Job::with_counter(work, counter_clone);
 
-        self.worker_pool.submit(job).expect("Failed to submit job");
+        self.worker_pool.submit(job);
 
         counter
     }
@@ -149,9 +149,7 @@ impl JobSystem {
             })
             .collect();
 
-        self.worker_pool
-            .submit_batch(job_objs)
-            .expect("Failed to submit batch");
+        self.worker_pool.submit_batch(job_objs);
 
         counter
     }
