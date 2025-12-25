@@ -29,6 +29,7 @@
 //! job_system.wait_for_counter(&counter);
 //! ```
 
+pub mod context;
 pub mod counter;
 pub mod fiber;
 pub mod job;
@@ -54,6 +55,7 @@ pub enum PinningStrategy {
     TieredSpillover,
 }
 
+pub use context::Context;
 pub use counter::Counter;
 pub use job::Job;
 pub use job_system::JobSystem;

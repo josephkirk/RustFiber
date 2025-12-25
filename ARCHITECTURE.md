@@ -13,10 +13,11 @@ The system consists of several key components:
 ### Core Components
 
 1. **JobSystem** - The main entry point for scheduling and managing parallel work
-2. **Worker Pool** - A pool of OS threads that execute jobs
-3. **Job Queue** - Thread-safe queue for pending work units
-4. **Counters** - Synchronization primitives for tracking job completion
-5. **Fibers** - Lightweight execution contexts for jobs
+2. **Context** - Safe interface for jobs to access the job system for nested parallelism
+3. **Worker Pool** - A pool of OS threads that execute jobs
+4. **Job Queue** - Thread-safe queue for pending work units
+5. **Counters** - Synchronization primitives for tracking job completion
+6. **Fibers** - Lightweight execution contexts for jobs
 
 ### Design Principles
 
@@ -30,6 +31,7 @@ The system consists of several key components:
 ## Features
 
 - ✅ **Parallel Job Execution**: Schedule work across multiple CPU cores
+- ✅ **Nested Parallelism**: Jobs can spawn child jobs using Context for recursive work decomposition
 - ✅ **Work-Stealing Scheduler**: Dynamic load balancing between worker threads
 - ✅ **Advanced Pinning**: Strategies like `AvoidSMT`, `CCDIsolation`, and `TieredSpillover`
 - ✅ **Counter-Based Waiting**: Wait for job completion without busy-waiting
@@ -125,6 +127,47 @@ for _ in 0..10 {
 job_system.wait_for_counter(&counter);
 ```
 
+### Nested Parallelism with Context
+
+The Context type enables safe nested parallelism, allowing jobs to spawn child jobs:
+
+```rust
+use rustfiber::JobSystem;
+
+let job_system = JobSystem::new(4);
+
+// Parent job spawns child jobs
+let counter = job_system.run_with_context(|ctx| {
+    // Subdivide work into parallel chunks
+    let mut counters = vec![];
+    
+    for chunk_id in 0..4 {
+        let child = ctx.spawn_job(move |ctx| {
+            // Child can spawn its own children
+            let grandchild = ctx.spawn_job(move |_| {
+                println!("Grandchild of chunk {} running", chunk_id);
+            });
+            ctx.wait_for(&grandchild);
+        });
+        counters.push(child);
+    }
+    
+    // Wait for all children
+    for c in counters {
+        ctx.wait_for(&c);
+    }
+});
+
+job_system.wait_for_counter(&counter);
+job_system.shutdown();
+```
+
+This pattern is useful for:
+- Recursive algorithms (quicksort, parallel reduce)
+- Hierarchical decomposition (particle systems, physics simulation)
+- Fork-join parallelism
+- Producer-consumer patterns
+
 ## Performance
 
 On a typical multi-core system, RustFiber achieves:
@@ -186,15 +229,72 @@ RustFiber uses a sophisticated **Work-Stealing** scheduler:
 - Counters use atomic reference counting
 - Worker threads own their receiver endpoints
 
+### Context and Nested Parallelism
+
+The Context type provides safe access to the job system from within jobs:
+
+**Design**: Context holds a reference to the JobSystem with lifetime checking. When a job is created with `run_with_context`, the JobSystem pointer is stored as a `usize` (to make it `Send`) and converted back safely when the job executes.
+
+**Safety Guarantees**:
+- The JobSystem is guaranteed to outlive all jobs it creates
+- Jobs are fully executed before `JobSystem::shutdown()` completes
+- Context lifetime is bounded by job execution scope
+- No unsafe pointer dereferencing outside controlled execution paths
+
+**API**:
+- `ctx.spawn_job(|ctx| ...)` - Spawn a single child job
+- `ctx.spawn_jobs(vec![...])` - Spawn multiple child jobs
+- `ctx.wait_for(&counter)` - Wait for child jobs to complete
+- `ctx.yield_now()` - Cooperatively yield execution (thread-level for now)
+
+This enables patterns like:
+- Recursive parallel algorithms
+- Hierarchical work decomposition
+- Fork-join parallelism
+- Cooperative yielding in long-running tasks
+
 ## Future Enhancements
 
 Potential improvements for production use:
 
 1. **True Fiber Context Switching**: Implement stackful fibers with context switching
 2. **Priority Queues**: Support job priorities
-3. **Fiber Yielding**: Allow fibers to yield and resume
+3. **Fiber Yielding**: Enhance cooperative yielding beyond thread-level to true fiber suspension
 4. **Instrumentation**: Add profiling and performance metrics
 5. **Async Integration**: Bridge with Rust's async/await
+
+## Solved Problems
+
+### Context Type for Nested Parallelism (✅ Implemented)
+
+Previously, applications like Arcel needed unsafe workarounds to access the JobSystem from within jobs:
+
+```rust
+// OLD: Unsafe workaround (no longer needed)
+let job_system_ptr_addr = &self.job_system as *const JobSystem as usize;
+jobs.push(Box::new(move || unsafe {
+   let js_ptr = job_system_ptr_addr as *const JobSystem;
+   (*js_ptr).run(...);  // Unsafe pointer dereference
+}));
+```
+
+The Context type provides a safe, ergonomic alternative:
+
+```rust
+// NEW: Safe with Context
+let counter = job_system.run_with_context(|ctx| {
+    let child = ctx.spawn_job(|_| {
+        // Child work
+    });
+    ctx.wait_for(&child);
+});
+```
+
+**Benefits**:
+- ✅ Type-safe: Lifetime-checked references instead of raw pointers
+- ✅ Ergonomic: Clean, composable API
+- ✅ Maintainable: No unsafe code required by users
+- ✅ Future-proof: Foundation for advanced features like fiber yielding
 
 ## References
 

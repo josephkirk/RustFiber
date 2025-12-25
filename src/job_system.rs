@@ -175,6 +175,89 @@ impl JobSystem {
         counter
     }
 
+    /// Submits a job with context access to be executed by the worker pool.
+    ///
+    /// Returns a counter that can be used to wait for the job's completion.
+    /// The job receives a Context that provides safe access to the job system
+    /// for nested parallelism and synchronization.
+    ///
+    /// # Arguments
+    ///
+    /// * `work` - The function to execute, which receives a Context
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::new(4);
+    /// let counter = job_system.run_with_context(|ctx| {
+    ///     println!("Hello from a job with context!");
+    ///     // Can spawn child jobs
+    ///     let child = ctx.spawn_job(|_| {
+    ///         println!("Child job");
+    ///     });
+    ///     ctx.wait_for(&child);
+    /// });
+    /// job_system.wait_for_counter(&counter);
+    /// ```
+    pub fn run_with_context<F>(&self, work: F) -> Counter
+    where
+        F: FnOnce(&crate::context::Context) + Send + 'static,
+    {
+        let counter = Counter::new(1);
+        let counter_clone = counter.clone();
+
+        let job_system_ptr = self as *const JobSystem as usize;
+        let job = Job::with_counter_and_context(work, counter_clone, job_system_ptr);
+
+        self.worker_pool.submit(job);
+
+        counter
+    }
+
+    /// Submits multiple jobs with context access and returns a counter tracking all of them.
+    ///
+    /// # Arguments
+    ///
+    /// * `jobs` - Iterator of functions to execute, each receiving a Context
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustfiber::{JobSystem, Context};
+    ///
+    /// let job_system = JobSystem::new(4);
+    /// let mut jobs: Vec<Box<dyn FnOnce(&Context) + Send>> = Vec::new();
+    /// jobs.push(Box::new(|_ctx| println!("Job 1")));
+    /// jobs.push(Box::new(|_ctx| println!("Job 2")));
+    /// jobs.push(Box::new(|_ctx| println!("Job 3")));
+    /// let counter = job_system.run_multiple_with_context(jobs);
+    /// job_system.wait_for_counter(&counter);
+    /// ```
+    pub fn run_multiple_with_context<I>(&self, jobs: I) -> Counter
+    where
+        I: IntoIterator<Item = Box<dyn FnOnce(&crate::context::Context) + Send + 'static>>,
+    {
+        let jobs_vec: Vec<_> = jobs.into_iter().collect();
+        let counter = Counter::new(jobs_vec.len());
+
+        let job_system_ptr = self as *const JobSystem as usize;
+
+        // Convert to Job objects and submit in batch for better performance
+        let job_objs: Vec<_> = jobs_vec
+            .into_iter()
+            .map(|work| {
+                let counter_clone = counter.clone();
+                Job::with_counter_and_context(work, counter_clone, job_system_ptr)
+            })
+            .collect();
+
+        self.worker_pool.submit_batch(job_objs);
+
+        counter
+    }
+
     /// Waits for a counter to reach zero (all tracked jobs completed).
     ///
     /// Note: This uses a simple polling approach with sleep. In a production
