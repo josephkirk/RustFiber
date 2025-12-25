@@ -26,8 +26,17 @@ pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
     ];
 
     let mut data_points = Vec::new();
+    let mut timed_out = false;
+    let total_start = Instant::now();
+    let timeout_duration = std::time::Duration::from_secs(crate::utils::DEFAULT_TIMEOUT_SECS);
 
     for &num_items in &test_sizes {
+        if total_start.elapsed() > timeout_duration {
+            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            timed_out = true;
+            break;
+        }
+
         eprintln!("\nTesting with {} items...", num_items);
 
         // Shared queue for producer-consumer pattern
@@ -38,21 +47,28 @@ pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
         let start = Instant::now();
 
         // Create producer jobs with batching to reduce lock contention
-        let num_producers = num_cpus() / 2;
+        let num_cpus = num_cpus();
+        let num_producers = (num_cpus / 2).max(1);
         let items_per_producer = num_items / num_producers;
+        let remainder = num_items % num_producers;
 
         let mut producer_jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        for _ in 0..num_producers {
+        for i in 0..num_producers {
             let queue_clone = queue.clone();
             let produced_clone = produced.clone();
+            let my_items = if i == num_producers - 1 {
+                items_per_producer + remainder
+            } else {
+                items_per_producer
+            };
 
             producer_jobs.push(Box::new(move || {
                 // Process items in batches to reduce lock overhead
                 let mut batch = Vec::with_capacity(PRODUCER_BATCH_SIZE);
-                for i in 0..items_per_producer {
-                    batch.push(i);
+                for j in 0..my_items {
+                    batch.push(j);
 
-                    if batch.len() >= PRODUCER_BATCH_SIZE || i == items_per_producer - 1 {
+                    if batch.len() >= PRODUCER_BATCH_SIZE || j == my_items - 1 {
                         // Push batch to queue with single lock acquisition
                         let count = batch.len();
                         let mut q = queue_clone.lock().unwrap();
@@ -67,7 +83,7 @@ pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
         }
 
         // Create consumer jobs
-        let num_consumers = num_cpus() / 2;
+        let num_consumers = (num_cpus / 2).max(1);
         let mut consumer_jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
 
         for _ in 0..num_consumers {
@@ -129,5 +145,6 @@ pub fn run_producer_consumer_benchmark() -> BenchmarkResult {
         system_info,
         crashed: false,
         crash_point: None,
+        timed_out,
     }
 }

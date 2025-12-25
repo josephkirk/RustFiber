@@ -25,8 +25,17 @@ pub fn run_quicksort_benchmark() -> BenchmarkResult {
     ];
 
     let mut data_points = Vec::new();
+    let mut timed_out = false;
+    let total_start = Instant::now();
+    let timeout_duration = std::time::Duration::from_secs(crate::utils::DEFAULT_TIMEOUT_SECS);
 
     for &array_size in &test_sizes {
+        if total_start.elapsed() > timeout_duration {
+            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            timed_out = true;
+            break;
+        }
+
         eprintln!("\nTesting with array size {}...", array_size);
 
         // Generate array to sort
@@ -74,5 +83,6 @@ pub fn run_quicksort_benchmark() -> BenchmarkResult {
         system_info,
         crashed: false,
         crash_point: None,
+        timed_out,
     }
 }

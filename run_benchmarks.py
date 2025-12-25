@@ -15,6 +15,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 output on all systems
+if sys.stdout.encoding != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 try:
     import matplotlib.pyplot as plt
     import matplotlib
@@ -28,31 +34,77 @@ except ImportError:
 
 
 def run_rust_benchmarks():
-    """Run the Rust benchmark binary and capture JSON output."""
+    """Run the Rust benchmark binary and yield JSON results line-by-line."""
     print("Running Rust benchmarks...")
     
+    # Map benchmark names to output filenames
+    filename_map = {
+        "Benchmark 1: Million Tiny Tasks (Fibonacci)": "benchmark_1_fibonacci.png",
+        "Benchmark 2: Recursive Task Decomposition (QuickSort)": "benchmark_2_quicksort.png",
+        "Benchmark 3: Producer-Consumer Stress Test": "benchmark_3_producer_consumer.png",
+        "Benchmark 4a: NAS EP (Embarrassingly Parallel)": "benchmark_4a_nas_ep.png",
+        "Benchmark 4b: NAS MG (Multi-Grid)": "benchmark_4b_nas_mg.png",
+        "Benchmark 4c: NAS CG (Conjugate Gradient)": "benchmark_4c_nas_cg.png",
+    }
+
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             ["cargo", "run", "--bin", "benchmarks", "--release"],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=True
+            bufsize=1
         )
         
-        # stderr contains the progress output, stdout contains JSON
-        print(result.stderr)  # Print progress to console
+        # In a separate thread or just by alternating, we should handle stderr
+        # but for simplicity in this script, we'll focus on stdout lines.
+        # The Rust binary prints mostly to stderr for progress.
         
-        # Parse JSON from stdout
-        benchmark_results = json.loads(result.stdout)
-        return benchmark_results
+        import threading
+        def print_stderr(pipe):
+            for line in pipe:
+                print(line, end='', file=sys.stderr)
         
-    except subprocess.CalledProcessError as e:
+        stderr_thread = threading.Thread(target=print_stderr, args=(process.stderr,))
+        stderr_thread.daemon = True
+        stderr_thread.start()
+
+        for line in process.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            
+            try:
+                result = json.loads(line)
+                name = result['name']
+                system_info = result['system_info']
+                cores = system_info['cpu_cores']
+                ram = round(system_info['total_memory_gb'])
+                
+                # Get base filename
+                base_filename = filename_map.get(name, f"benchmark_{name.replace(' ', '_').lower()}")
+                # Remove .png from base if present
+                if base_filename.endswith(".png"):
+                    base_filename = base_filename[:-4]
+                
+                filename = f"{base_filename}_{cores}c_{ram}gb.png"
+                
+                print(f"\nCompleted: {name}")
+                if result.get('timed_out'):
+                    print(f"  ! Note: Benchmark timed out after 1 minute")
+                
+                create_graph(result, filename)
+                yield name, filename
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON line: {e}")
+                print(f"Line content: {line}")
+        
+        process.wait()
+        if process.returncode != 0:
+            print(f"Benchmarks process exited with code {process.returncode}")
+            
+    except Exception as e:
         print(f"Error running benchmarks: {e}")
-        print(f"stderr: {e.stderr}")
-        sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON output: {e}")
-        print(f"stdout: {result.stdout}")
         sys.exit(1)
 
 
@@ -85,6 +137,10 @@ def create_graph(benchmark_data, output_filename):
     if crashed and crash_point:
         info_text += f"\n! System crashed at {crash_point} tasks"
     
+    # Add timeout info if applicable
+    if benchmark_data.get('timed_out'):
+        info_text += "\n! Benchmark timed out after 1 minute"
+
     plt.figtext(0.5, 0.01, info_text, ha='center', fontsize=10, 
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
@@ -97,7 +153,7 @@ def create_graph(benchmark_data, output_filename):
     plt.savefig(output_path, dpi=100, bbox_inches='tight')
     plt.close()
     
-    print(f"✓ Saved graph to {output_path}")
+    print(f"Done: Saved graph to {output_path}")
 
 
 def main():
@@ -111,39 +167,19 @@ def main():
     docs_dir = Path("docs")
     docs_dir.mkdir(exist_ok=True)
     
-    # Run benchmarks
-    results = run_rust_benchmarks()
+    # Run benchmarks and generate graphs incrementally
+    generated_files = []
+    for name, filename in run_rust_benchmarks():
+        generated_files.append((name, filename))
     
     print()
     print("=" * 60)
-    print("Generating graphs...")
-    print("=" * 60)
-    print()
-    
-    # Map benchmark names to output filenames
-    filename_map = {
-        "Benchmark 1: Million Tiny Tasks (Fibonacci)": "benchmark_1_fibonacci.png",
-        "Benchmark 2: Recursive Task Decomposition (QuickSort)": "benchmark_2_quicksort.png",
-        "Benchmark 3: Producer-Consumer Stress Test": "benchmark_3_producer_consumer.png",
-        "Benchmark 4a: NAS EP (Embarrassingly Parallel)": "benchmark_4a_nas_ep.png",
-        "Benchmark 4b: NAS MG (Multi-Grid)": "benchmark_4b_nas_mg.png",
-        "Benchmark 4c: NAS CG (Conjugate Gradient)": "benchmark_4c_nas_cg.png",
-    }
-    
-    # Generate graphs
-    for result in results:
-        name = result['name']
-        filename = filename_map.get(name, f"benchmark_{name.replace(' ', '_').lower()}.png")
-        create_graph(result, filename)
-    
-    print()
-    print("=" * 60)
-    print("All graphs generated successfully!")
+    print("All benchmarks and graphs completed!")
     print("=" * 60)
     print()
     print("Graphs saved in docs/ folder:")
-    for filename in filename_map.values():
-        print(f"  - docs/{filename}")
+    for name, filename in generated_files:
+        print(f"  - {name} -> docs/{filename}")
     print()
 
 

@@ -125,8 +125,16 @@ pub fn run_nas_ep_benchmark() -> BenchmarkResult {
 
     let ep_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000];
     let mut data_points = Vec::new();
+    let mut timed_out = false;
+    let total_start = Instant::now();
+    let timeout_duration = std::time::Duration::from_secs(crate::utils::DEFAULT_TIMEOUT_SECS);
 
     for &size in &ep_sizes {
+        if total_start.elapsed() > timeout_duration {
+            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            timed_out = true;
+            break;
+        }
         eprintln!("Testing EP with {} tasks...", size);
         let elapsed_ms = run_ep_benchmark(&job_system, size);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
@@ -144,6 +152,7 @@ pub fn run_nas_ep_benchmark() -> BenchmarkResult {
         system_info,
         crashed: false,
         crash_point: None,
+        timed_out,
     }
 }
 
@@ -161,8 +170,16 @@ pub fn run_nas_mg_benchmark() -> BenchmarkResult {
 
     let mg_sizes = vec![50, 100, 150, 200, 250, 300];
     let mut data_points = Vec::new();
+    let mut timed_out = false;
+    let total_start = Instant::now();
+    let timeout_duration = std::time::Duration::from_secs(crate::utils::DEFAULT_TIMEOUT_SECS);
 
     for &size in &mg_sizes {
+        if total_start.elapsed() > timeout_duration {
+            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            timed_out = true;
+            break;
+        }
         eprintln!("Testing MG with {}x{} grid...", size, size);
         let elapsed_ms = run_mg_benchmark(&job_system, size);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
@@ -180,6 +197,7 @@ pub fn run_nas_mg_benchmark() -> BenchmarkResult {
         system_info,
         crashed: false,
         crash_point: None,
+        timed_out,
     }
 }
 
@@ -196,8 +214,16 @@ pub fn run_nas_cg_benchmark() -> BenchmarkResult {
 
     let cg_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
     let mut data_points = Vec::new();
+    let mut timed_out = false;
+    let total_start = Instant::now();
+    let timeout_duration = std::time::Duration::from_secs(crate::utils::DEFAULT_TIMEOUT_SECS);
 
     for &size in &cg_sizes {
+        if total_start.elapsed() > timeout_duration {
+            eprintln!("\n! Timeout reached ({}s), stopping benchmark.", crate::utils::DEFAULT_TIMEOUT_SECS);
+            timed_out = true;
+            break;
+        }
         eprintln!("Testing CG with matrix size {}...", size);
         let elapsed_ms = run_cg_benchmark(&job_system, size);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
@@ -215,5 +241,6 @@ pub fn run_nas_cg_benchmark() -> BenchmarkResult {
         system_info,
         crashed: false,
         crash_point: None,
+        timed_out,
     }
 }

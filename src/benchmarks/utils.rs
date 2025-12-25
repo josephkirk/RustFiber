@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BenchmarkResult {
     pub name: String,
@@ -7,6 +9,7 @@ pub struct BenchmarkResult {
     pub system_info: SystemInfo,
     pub crashed: bool,
     pub crash_point: Option<usize>,
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,27 +40,11 @@ impl SystemInfo {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn get_total_memory_gb() -> f64 {
-        use std::fs;
-
-        // Try to read from /proc/meminfo
-        if let Ok(contents) = fs::read_to_string("/proc/meminfo") {
-            for line in contents.lines() {
-                if line.starts_with("MemTotal:")
-                    && let Some(kb_str) = line.split_whitespace().nth(1)
-                    && let Ok(kb) = kb_str.parse::<f64>()
-                {
-                    return kb / (1024.0 * 1024.0); // Convert KB to GB
-                }
-            }
-        }
-        8.0 // Default fallback
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn get_total_memory_gb() -> f64 {
-        8.0 // Default fallback for non-Linux systems
+        use sysinfo::System;
+        let mut sys = System::new_all();
+        sys.refresh_memory();
+        sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0)
     }
 }
 
