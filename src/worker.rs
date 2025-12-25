@@ -31,12 +31,11 @@ impl Worker {
     ) -> Self {
         let handle = thread::spawn(move || {
             // Pin worker to its core for better cache locality
-            if pin_to_core {
-                if let Some(core_ids) = core_affinity::get_core_ids() {
-                    if id < core_ids.len() {
-                        core_affinity::set_for_current(core_ids[id]);
-                    }
-                }
+            if pin_to_core
+                && let Some(core_ids) = core_affinity::get_core_ids()
+                && id < core_ids.len()
+            {
+                core_affinity::set_for_current(core_ids[id]);
             }
 
             Worker::run_loop(id, local_queue, stealers, injector, shutdown);
@@ -67,7 +66,7 @@ impl Worker {
                 // If local queue is empty, try to steal from the global injector
                 let mut retry_count = 0;
                 const MAX_RETRIES: usize = 3;
-                
+
                 loop {
                     match injector.steal_batch_and_pop(&local_queue) {
                         crossbeam::deque::Steal::Success(job) => return Some(job),
@@ -228,8 +227,8 @@ impl WorkerPool {
 mod tests {
     use super::*;
     use crate::counter::Counter;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[test]
@@ -292,7 +291,7 @@ mod tests {
 
         let num_jobs = 100;
         let mut jobs = Vec::new();
-        
+
         for _ in 0..num_jobs {
             let counter_clone = counter.clone();
             jobs.push(Job::new(move || {
@@ -341,15 +340,15 @@ mod tests {
         for i in 0..num_jobs {
             let counter_clone = counter.clone();
             let worker_ids_clone = worker_ids.clone();
-            
+
             let job = Job::new(move || {
                 counter_clone.fetch_add(1, Ordering::SeqCst);
-                
+
                 // Track which worker executed this job
                 if let Ok(mut ids) = worker_ids_clone.lock() {
                     ids.push(i);
                 }
-                
+
                 // Variable work to encourage stealing
                 if i % 10 == 0 {
                     thread::sleep(Duration::from_micros(100));
