@@ -1,0 +1,15 @@
+[package]
+name = "rustfiber"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossbeam = "0.8"
+
+[lib]
+name = "rustfiber"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustfiber"
+path = "src/main.rs"
