@@ -20,18 +20,32 @@ The system consists of several key components:
 
 ### Design Principles
 
-- **M:N Threading Model**: Multiple fibers scheduled onto a fixed pool of worker threads
+- **Work-Stealing Model**: Efficient job distribution using local queues, a global injector, and crossbeam-deque
+- **Thread Pinning Strategies**: Optimized core mapping for x86 and Ryzen architectures
+- **Tiered Spillover System**: Dynamic core activation based on system load
 - **Counter-Based Synchronization**: Efficient tracking of job completion without blocking
-- **Lock-Free Communication**: Using crossbeam channels for job distribution
+- **Lock-Free Communication**: Using crossbeam-deque for minimal contention
 - **Zero-Cost Abstractions**: Leveraging Rust's type system for safety without overhead
 
 ## Features
 
 - ✅ **Parallel Job Execution**: Schedule work across multiple CPU cores
+- ✅ **Work-Stealing Scheduler**: Dynamic load balancing between worker threads
+- ✅ **Advanced Pinning**: Strategies like `AvoidSMT`, `CCDIsolation`, and `TieredSpillover`
 - ✅ **Counter-Based Waiting**: Wait for job completion without busy-waiting
 - ✅ **Thread-Safe**: Built on Rust's ownership model and crossbeam primitives
 - ✅ **High Throughput**: Capable of millions of jobs per second
 - ✅ **Simple API**: Easy to use interface for job submission and synchronization
+
+## Thread Pinning Strategies
+
+The system supports several strategies to optimize performance for different hardware:
+
+- **None**: Default OS scheduling.
+- **Linear**: Simple 1:1 mapping of workers to logical processors.
+- **AvoidSMT**: Pins only to physical cores, avoiding hyperthreading contention.
+- **CCDIsolation**: Pins to physical cores on the first CCD only (Ryzen optimization).
+- **TieredSpillover**: A dynamic system that activates physical cores first (Tier 1), then spills over to secondary CCDs (Tier 2), and finally SMT threads (Tier 3) only when load thresholds (80% utilization) are exceeded.
 
 ## Installation
 
@@ -155,15 +169,16 @@ Tests cover:
 
 The system uses:
 - `Arc` for shared ownership
-- `AtomicUsize` for counter operations
-- `crossbeam::channel` for lock-free job queues
+- `AtomicUsize` for counter operations and active worker tracking
+- `crossbeam::deque` for lock-free work-stealing queues
 - Rust's `Send` and `Sync` traits for compile-time safety
 
 ### Scheduling
 
-- Jobs are distributed via an unbounded MPSC channel
-- Worker threads continuously pull and execute jobs
-- No work-stealing (can be added as an optimization)
+RustFiber uses a sophisticated **Work-Stealing** scheduler:
+1. **Local Queue**: Each worker has a local FIFO queue for minimal contention.
+2. **Global Injector**: Jobs submitted from outside the systems are deposited here.
+3. **Stealing Logic**: Idle workers first check their local queue, then the global injector, and finally attempt to "steal" work from other workers' queues to ensure balanced load.
 
 ### Memory Management
 
@@ -176,12 +191,10 @@ The system uses:
 Potential improvements for production use:
 
 1. **True Fiber Context Switching**: Implement stackful fibers with context switching
-2. **Work Stealing**: Add work-stealing queues for better load balancing
-3. **Priority Queues**: Support job priorities
-4. **Fiber Yielding**: Allow fibers to yield and resume
-5. **Affinity Control**: Pin jobs to specific cores
-6. **Instrumentation**: Add profiling and performance metrics
-7. **Async Integration**: Bridge with Rust's async/await
+2. **Priority Queues**: Support job priorities
+3. **Fiber Yielding**: Allow fibers to yield and resume
+4. **Instrumentation**: Add profiling and performance metrics
+5. **Async Integration**: Bridge with Rust's async/await
 
 ## References
 
