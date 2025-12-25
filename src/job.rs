@@ -4,6 +4,18 @@
 //! They encapsulate a closure and associated counter for tracking completion.
 
 use crate::counter::Counter;
+use crate::context::Context;
+
+/// Internal representation of work to be executed.
+enum Work {
+    /// Simple closure without context
+    Simple(Box<dyn FnOnce() + Send + 'static>),
+    /// Closure that requires context, along with JobSystem reference
+    WithContext {
+        work: Box<dyn FnOnce(&Context) + Send + 'static>,
+        job_system_ptr: usize,  // Store as usize to make it Send
+    },
+}
 
 /// A unit of work to be executed by the job system.
 ///
@@ -11,7 +23,7 @@ use crate::counter::Counter;
 /// that is decremented upon completion.
 pub struct Job {
     /// The work to be executed
-    work: Box<dyn FnOnce() + Send + 'static>,
+    work: Work,
     /// Optional counter to decrement when the job completes
     counter: Option<Counter>,
 }
@@ -23,7 +35,7 @@ impl Job {
         F: FnOnce() + Send + 'static,
     {
         Job {
-            work: Box::new(work),
+            work: Work::Simple(Box::new(work)),
             counter: None,
         }
     }
@@ -34,14 +46,52 @@ impl Job {
         F: FnOnce() + Send + 'static,
     {
         Job {
-            work: Box::new(work),
+            work: Work::Simple(Box::new(work)),
+            counter: Some(counter),
+        }
+    }
+
+    /// Creates a new job with context support and an associated counter.
+    ///
+    /// # Safety
+    ///
+    /// The job_system_ptr must remain valid for the lifetime of this job.
+    /// This is guaranteed by the JobSystem's design where jobs are executed
+    /// before the JobSystem is dropped.
+    pub(crate) fn with_counter_and_context<F>(
+        work: F,
+        counter: Counter,
+        job_system_ptr: usize,
+    ) -> Self
+    where
+        F: FnOnce(&Context) + Send + 'static,
+    {
+        Job {
+            work: Work::WithContext {
+                work: Box::new(work),
+                job_system_ptr,
+            },
             counter: Some(counter),
         }
     }
 
     /// Executes the job and decrements its counter if present.
     pub fn execute(self) {
-        (self.work)();
+        match self.work {
+            Work::Simple(work) => work(),
+            Work::WithContext {
+                work,
+                job_system_ptr,
+            } => {
+                // SAFETY: The JobSystem is guaranteed to outlive the jobs it creates.
+                // Jobs are executed before JobSystem::shutdown() completes.
+                unsafe {
+                    let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
+                    let context = Context::new(job_system);
+                    work(&context);
+                }
+            }
+        }
 
         if let Some(counter) = self.counter {
             counter.decrement();

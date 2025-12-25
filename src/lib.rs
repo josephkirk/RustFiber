@@ -30,6 +30,7 @@
 //! ```
 
 pub mod counter;
+pub mod context;
 pub mod fiber;
 pub mod job;
 pub mod job_system;
@@ -55,6 +56,7 @@ pub enum PinningStrategy {
 }
 
 pub use counter::Counter;
+pub use context::Context;
 pub use job::Job;
 pub use job_system::JobSystem;
 
