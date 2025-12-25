@@ -18,16 +18,16 @@ fn fibonacci(n: u64) -> u64 {
     b
 }
 
-pub fn run_fibonacci_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
+pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 1: Million Tiny Tasks (Fibonacci) ===");
 
-    let system_info = SystemInfo::collect(strategy);
+    let system_info = SystemInfo::collect(strategy, threads);
     eprintln!(
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
+    let job_system = JobSystem::new_with_strategy(threads, strategy);
 
     let test_sizes = vec![
         1_000, 5_000, 10_000, 50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000, 1_250_000,

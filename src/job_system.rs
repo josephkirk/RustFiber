@@ -213,6 +213,11 @@ impl JobSystem {
         self.worker_pool.size()
     }
 
+    /// Returns the number of currently active workers.
+    pub fn active_workers(&self) -> usize {
+        self.worker_pool.active_count()
+    }
+
     /// Shuts down the job system, waiting for all jobs to complete.
     ///
     /// Returns Ok if shutdown was successful, or Err if any worker threads panicked.

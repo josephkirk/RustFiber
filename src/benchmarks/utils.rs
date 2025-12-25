@@ -27,12 +27,7 @@ pub struct SystemInfo {
 }
 
 impl SystemInfo {
-    pub fn collect(strategy: PinningStrategy) -> Self {
-        // Get CPU count
-        let cpu_cores = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-
+    pub fn collect(strategy: PinningStrategy, cpu_cores: usize) -> Self {
         // Get total memory - use sysinfo if available, otherwise estimate
         let total_memory_gb = Self::get_total_memory_gb();
 

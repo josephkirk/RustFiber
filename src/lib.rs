@@ -50,6 +50,8 @@ pub enum PinningStrategy {
     /// Pin to physical cores on the first CCD only (Logical 0, 2, ..., 14).
     /// This is optimized for AMD Ryzen systems to avoid CCD cross-over latency.
     CCDIsolation,
+    /// Dynamic strategy: Prioritizes CCD0, then CCD1, then SMT threads based on load.
+    TieredSpillover,
 }
 
 pub use counter::Counter;

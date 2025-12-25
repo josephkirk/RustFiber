@@ -30,9 +30,9 @@ fn run_ep_benchmark(job_system: &JobSystem, num_tasks: usize) -> f64 {
 }
 
 // Multi-Grid (MG) - Tests communication and memory bandwidth
-fn run_mg_benchmark(job_system: &JobSystem, grid_size: usize) -> f64 {
+fn run_mg_benchmark(job_system: &JobSystem, grid_size: usize, threads: usize) -> f64 {
     // Use a vector of per-chunk grids to reduce lock contention
-    let num_chunks = num_cpus();
+    let num_chunks = threads;
     let rows_per_chunk = grid_size / num_chunks;
 
     // Each chunk gets its own grid section to reduce lock contention
@@ -72,14 +72,14 @@ fn run_mg_benchmark(job_system: &JobSystem, grid_size: usize) -> f64 {
 }
 
 // Conjugate Gradient (CG) - Tests irregular memory access
-fn run_cg_benchmark(job_system: &JobSystem, matrix_size: usize) -> f64 {
+fn run_cg_benchmark(job_system: &JobSystem, matrix_size: usize, threads: usize) -> f64 {
     let vector = Arc::new(Mutex::new(vec![1.0; matrix_size]));
     let result = Arc::new(Mutex::new(vec![0.0; matrix_size]));
 
     let start = Instant::now();
 
     // Simulate sparse matrix-vector multiplication with irregular access
-    let num_chunks = num_cpus();
+    let num_chunks = threads;
     let chunk_size = matrix_size / num_chunks;
 
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
@@ -112,16 +112,16 @@ fn run_cg_benchmark(job_system: &JobSystem, matrix_size: usize) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 
-pub fn run_nas_ep_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
+pub fn run_nas_ep_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4a: NAS EP (Embarrassingly Parallel) ===");
 
-    let system_info = SystemInfo::collect(strategy);
+    let system_info = SystemInfo::collect(strategy, threads);
     eprintln!(
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
+    let job_system = JobSystem::new_with_strategy(threads, strategy);
 
     let ep_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000];
     let mut data_points = Vec::new();
@@ -159,17 +159,17 @@ pub fn run_nas_ep_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
     }
 }
 
-pub fn run_nas_mg_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
+pub fn run_nas_mg_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4b: NAS MG (Multi-Grid) ===");
 
-    let system_info = SystemInfo::collect(strategy);
+    let system_info = SystemInfo::collect(strategy, threads);
     eprintln!(
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
     // Use specific strategy
-    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
+    let job_system = JobSystem::new_with_strategy(threads, strategy);
 
     let mg_sizes = vec![50, 100, 150, 200, 250, 300];
     let mut data_points = Vec::new();
@@ -187,7 +187,7 @@ pub fn run_nas_mg_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
             break;
         }
         eprintln!("Testing MG with {}x{} grid...", size, size);
-        let elapsed_ms = run_mg_benchmark(&job_system, size);
+        let elapsed_ms = run_mg_benchmark(&job_system, size, threads);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
         data_points.push(DataPoint {
             num_tasks: size,
@@ -207,16 +207,16 @@ pub fn run_nas_mg_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
     }
 }
 
-pub fn run_nas_cg_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
+pub fn run_nas_cg_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4c: NAS CG (Conjugate Gradient) ===");
 
-    let system_info = SystemInfo::collect(strategy);
+    let system_info = SystemInfo::collect(strategy, threads);
     eprintln!(
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
+    let job_system = JobSystem::new_with_strategy(threads, strategy);
 
     let cg_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
     let mut data_points = Vec::new();
@@ -234,7 +234,7 @@ pub fn run_nas_cg_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
             break;
         }
         eprintln!("Testing CG with matrix size {}...", size);
-        let elapsed_ms = run_cg_benchmark(&job_system, size);
+        let elapsed_ms = run_cg_benchmark(&job_system, size, threads);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
         data_points.push(DataPoint {
             num_tasks: size,

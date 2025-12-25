@@ -19,6 +19,7 @@ fn main() {
             "linear" => PinningStrategy::Linear,
             "avoid-smt" | "avoid_smt" => PinningStrategy::AvoidSMT,
             "ccd-isolation" | "ccd_isolation" => PinningStrategy::CCDIsolation,
+            "tiered-spillover" => PinningStrategy::TieredSpillover,
             _ => {
                 eprintln!("Unknown strategy: {}. Using Linear.", args[1]);
                 PinningStrategy::Linear
@@ -28,10 +29,17 @@ fn main() {
         PinningStrategy::Linear
     };
 
+    let threads = if args.len() > 2 {
+        args[2].parse::<usize>().unwrap_or_else(|_| utils::num_cpus())
+    } else {
+        utils::num_cpus()
+    };
+
     eprintln!("=======================================================");
     eprintln!("           RustFiber Benchmark Suite");
     eprintln!("=======================================================");
     eprintln!("\nStrategy: {:?}", strategy);
+    eprintln!("Threads:  {}", threads);
     eprintln!("\nThis benchmark suite tests the RustFiber job system");
     eprintln!("with 4 different stress tests:\n");
     eprintln!("1. Million Tiny Tasks (Fibonacci)");
@@ -41,7 +49,7 @@ fn main() {
     eprintln!("\n=======================================================\n");
 
     // Run benchmarks one by one and output JSON for each immediately
-    let runs: Vec<fn(PinningStrategy) -> utils::BenchmarkResult> = vec![
+    let runs: Vec<fn(PinningStrategy, usize) -> utils::BenchmarkResult> = vec![
         run_fibonacci_benchmark,
         run_quicksort_benchmark,
         run_producer_consumer_benchmark,
@@ -51,7 +59,7 @@ fn main() {
     ];
 
     for run in runs {
-        let result = run(strategy);
+        let result = run(strategy, threads);
         match serde_json::to_string(&result) {
             Ok(json) => println!("{}", json),
             Err(e) => eprintln!("Error serializing result: {}", e),

@@ -9,6 +9,7 @@ use crate::fiber::Fiber;
 use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -28,8 +29,11 @@ impl Worker {
         local_queue: Deque<Job>,
         stealers: Arc<Vec<Stealer<Job>>>,
         injector: Arc<Injector<Job>>,
-        shutdown: Arc<std::sync::atomic::AtomicBool>,
+        shutdown: Arc<AtomicBool>,
         core_id: Option<CoreId>,
+        active_workers: Arc<AtomicUsize>,
+        tier: u32,
+        threshold: usize,
     ) -> Self {
         let handle = thread::spawn(move || {
             // Pin worker to its core for better cache locality if specified
@@ -37,7 +41,16 @@ impl Worker {
                 core_affinity::set_for_current(core_id);
             }
 
-            Worker::run_loop(id, local_queue, stealers, injector, shutdown);
+            Worker::run_loop(
+                id,
+                local_queue,
+                stealers,
+                injector,
+                shutdown,
+                active_workers,
+                tier,
+                threshold,
+            );
         });
 
         Worker {
@@ -52,12 +65,25 @@ impl Worker {
         local_queue: Deque<Job>,
         stealers: Arc<Vec<Stealer<Job>>>,
         injector: Arc<Injector<Job>>,
-        shutdown: Arc<std::sync::atomic::AtomicBool>,
+        shutdown: Arc<AtomicBool>,
+        active_workers: Arc<AtomicUsize>,
+        tier: u32,
+        threshold: usize,
     ) {
         loop {
             // Check for shutdown signal
-            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            if shutdown.load(Ordering::Relaxed) {
                 break;
+            }
+
+            // Tiered Spillover Logic: Stay dormant if load is below threshold
+            if tier > 1 && active_workers.load(Ordering::Relaxed) < threshold {
+                // Check if there is even any work in the global injector before yielding
+                // To avoid deadlocks if Tier 1 is busy with long tasks but injector has work.
+                if injector.is_empty() {
+                    thread::yield_now();
+                    continue;
+                }
             }
 
             // Try to get a job from the local queue first
@@ -92,8 +118,12 @@ impl Worker {
 
             match job {
                 Some(job) => {
+                    // Mark as active before running
+                    active_workers.fetch_add(1, Ordering::Relaxed);
                     let fiber = Fiber::new(job);
                     fiber.run();
+                    // Mark as inactive after finishing
+                    active_workers.fetch_sub(1, Ordering::Relaxed);
                 }
                 None => {
                     // No work available, yield to prevent busy-waiting
@@ -122,7 +152,8 @@ impl Worker {
 pub struct WorkerPool {
     workers: Vec<Worker>,
     injector: Arc<Injector<Job>>,
-    shutdown: Arc<std::sync::atomic::AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    active_workers: Arc<AtomicUsize>,
 }
 
 impl WorkerPool {
@@ -146,7 +177,8 @@ impl WorkerPool {
     /// Creates a new worker pool with a specific pinning strategy.
     pub fn new_with_strategy(num_threads: usize, strategy: PinningStrategy) -> Self {
         let injector = Arc::new(Injector::new());
-        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let active_workers = Arc::new(AtomicUsize::new(0));
         let mut local_queues = Vec::with_capacity(num_threads);
         let mut stealers = Vec::with_capacity(num_threads);
 
@@ -160,34 +192,61 @@ impl WorkerPool {
         let stealers = Arc::new(stealers);
         let mut workers = Vec::with_capacity(num_threads);
 
-        // Compute core mapping based on strategy
+        // Compute core mapping and tiering based on strategy
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
-        let mapped_cores: Vec<Option<CoreId>> = match strategy {
-            PinningStrategy::None => vec![None; num_threads],
-            PinningStrategy::Linear => {
-                let mut cores = Vec::with_capacity(num_threads);
-                for i in 0..num_threads {
-                    cores.push(core_ids.get(i % core_ids.len().max(1)).copied());
+        let mut mapped_cores = Vec::with_capacity(num_threads);
+        let mut tiers = vec![1; num_threads];
+        let mut thresholds = vec![0; num_threads];
+
+        match strategy {
+            PinningStrategy::None => {
+                for _ in 0..num_threads {
+                    mapped_cores.push(None);
                 }
-                cores
+            }
+            PinningStrategy::Linear => {
+                for i in 0..num_threads {
+                    mapped_cores.push(core_ids.get(i % core_ids.len().max(1)).copied());
+                }
             }
             PinningStrategy::AvoidSMT => {
-                // Pick even-indexed cores (physical)
                 let physical_cores: Vec<_> = core_ids.iter().step_by(2).copied().collect();
-                let mut cores = Vec::with_capacity(num_threads);
                 for i in 0..num_threads {
-                    cores.push(physical_cores.get(i % physical_cores.len().max(1)).copied());
+                    mapped_cores.push(physical_cores.get(i % physical_cores.len().max(1)).copied());
                 }
-                cores
             }
             PinningStrategy::CCDIsolation => {
-                // Pin workers to the first 8 physical cores (Logical 0, 2, ..., 14)
                 let ccd1_cores: Vec<_> = core_ids.iter().step_by(2).take(8).copied().collect();
-                let mut cores = Vec::with_capacity(num_threads);
                 for i in 0..num_threads {
-                    cores.push(ccd1_cores.get(i % ccd1_cores.len().max(1)).copied());
+                    mapped_cores.push(ccd1_cores.get(i % ccd1_cores.len().max(1)).copied());
                 }
-                cores
+            }
+            PinningStrategy::TieredSpillover => {
+                // Tier 1: CCD0 Physical (first 8 physical cores)
+                let ccd0_physical: Vec<_> = core_ids.iter().step_by(2).take(8).copied().collect();
+                // Tier 2: CCD1 Physical (next 8 physical cores)
+                let ccd1_physical: Vec<_> =
+                    core_ids.iter().step_by(2).skip(8).take(8).copied().collect();
+                // Tier 3: SMT (all remaining)
+                let smt_cores: Vec<_> = core_ids.iter().skip(1).step_by(2).copied().collect();
+
+                for i in 0..num_threads {
+                    if i < ccd0_physical.len() {
+                        mapped_cores.push(Some(ccd0_physical[i]));
+                        tiers[i] = 1;
+                        thresholds[i] = 0;
+                    } else if i < ccd0_physical.len() + ccd1_physical.len() {
+                        let idx = i - ccd0_physical.len();
+                        mapped_cores.push(Some(ccd1_physical[idx]));
+                        tiers[i] = 2;
+                        thresholds[i] = 7; // Wake up when 7 threads are busy (80% of Tier 1)
+                    } else {
+                        let idx = (i - ccd0_physical.len() - ccd1_physical.len()) % smt_cores.len();
+                        mapped_cores.push(Some(smt_cores[idx]));
+                        tiers[i] = 3;
+                        thresholds[i] = 15; // Wake up when 15 threads are busy (approx fully physical)
+                    }
+                }
             }
         };
 
@@ -201,6 +260,9 @@ impl WorkerPool {
                 Arc::clone(&injector),
                 Arc::clone(&shutdown),
                 core_id,
+                Arc::clone(&active_workers),
+                tiers[id],
+                thresholds[id],
             ));
         }
 
@@ -208,6 +270,7 @@ impl WorkerPool {
             workers,
             injector,
             shutdown,
+            active_workers,
         }
     }
 
@@ -226,6 +289,11 @@ impl WorkerPool {
     /// Returns the number of worker threads in the pool.
     pub fn size(&self) -> usize {
         self.workers.len()
+    }
+
+    /// Returns the number of currently active workers.
+    pub fn active_count(&self) -> usize {
+        self.active_workers.load(Ordering::Relaxed)
     }
 
     /// Shuts down the worker pool and waits for all threads to finish.

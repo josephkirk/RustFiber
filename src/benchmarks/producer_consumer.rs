@@ -10,16 +10,16 @@ use std::time::Instant;
 /// a good balance between lock overhead reduction and memory locality.
 const PRODUCER_BATCH_SIZE: usize = 32;
 
-pub fn run_producer_consumer_benchmark(strategy: PinningStrategy) -> BenchmarkResult {
+pub fn run_producer_consumer_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 3: Producer-Consumer Stress Test ===");
 
-    let system_info = SystemInfo::collect(strategy);
+    let system_info = SystemInfo::collect(strategy, threads);
     eprintln!(
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new_with_strategy(num_cpus(), strategy);
+    let job_system = JobSystem::new_with_strategy(threads, strategy);
 
     let test_sizes = vec![
         1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000,
@@ -50,8 +50,7 @@ pub fn run_producer_consumer_benchmark(strategy: PinningStrategy) -> BenchmarkRe
         let start = Instant::now();
 
         // Create producer jobs with batching to reduce lock contention
-        let num_cpus = num_cpus();
-        let num_producers = (num_cpus / 2).max(1);
+        let num_producers = (threads / 2).max(1);
         let items_per_producer = num_items / num_producers;
         let remainder = num_items % num_producers;
 
@@ -86,7 +85,7 @@ pub fn run_producer_consumer_benchmark(strategy: PinningStrategy) -> BenchmarkRe
         }
 
         // Create consumer jobs
-        let num_consumers = (num_cpus / 2).max(1);
+        let num_consumers = (threads / 2).max(1);
         let mut consumer_jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
 
         for _ in 0..num_consumers {
