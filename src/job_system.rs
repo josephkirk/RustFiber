@@ -42,6 +42,28 @@ impl JobSystem {
         }
     }
 
+    /// Creates a new job system with CPU core pinning enabled.
+    ///
+    /// Each worker thread is pinned to a specific CPU core for better
+    /// cache locality and reduced context switching overhead.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_threads` - Number of worker threads to create
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::new_with_affinity(4);
+    /// ```
+    pub fn new_with_affinity(num_threads: usize) -> Self {
+        JobSystem {
+            worker_pool: WorkerPool::new_with_affinity(num_threads, true),
+        }
+    }
+
     /// Creates a job system with one thread per CPU core.
     ///
     /// # Example
@@ -118,11 +140,18 @@ impl JobSystem {
         let jobs_vec: Vec<_> = jobs.into_iter().collect();
         let counter = Counter::new(jobs_vec.len());
 
-        for work in jobs_vec {
-            let counter_clone = counter.clone();
-            let job = Job::with_counter(work, counter_clone);
-            self.worker_pool.submit(job).expect("Failed to submit job");
-        }
+        // Convert to Job objects and submit in batch for better performance
+        let job_objs: Vec<_> = jobs_vec
+            .into_iter()
+            .map(|work| {
+                let counter_clone = counter.clone();
+                Job::with_counter(work, counter_clone)
+            })
+            .collect();
+
+        self.worker_pool
+            .submit_batch(job_objs)
+            .expect("Failed to submit batch");
 
         counter
     }
