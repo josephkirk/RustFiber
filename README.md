@@ -5,6 +5,9 @@
 
 A high-performance fiber-based job system implementation in Rust, following the architectural principles from Naughty Dog's engine parallelization work.
 
+!!! note
+This is a test to check Github Copilot capabilities
+
 ## Features
 
 - **Parallel Job Execution**: Efficiently schedule work across multiple CPU cores
