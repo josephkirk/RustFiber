@@ -1,6 +1,6 @@
 # RustFiber
 
-[![CI](https://github.com/josephkirk/RustFiber/workflows/CI/badge.svg)](https://github.com/josephkirk/RustFiber/actions/workflows/ci.yml)
+[![CI](https://github.com/josephkirk/RustFiber/actions/workflows/ci.yml/badge.svg)](https://github.com/josephkirk/RustFiber/actions/workflows/ci.yml)
 [![Documentation](https://github.com/josephkirk/RustFiber/workflows/Deploy%20Documentation/badge.svg)](https://josephkirk.github.io/RustFiber/)
 
 A high-performance fiber-based job system implementation in Rust, following the architectural principles from Naughty Dog's engine parallelization work.
