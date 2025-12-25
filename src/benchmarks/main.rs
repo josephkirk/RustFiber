@@ -30,7 +30,9 @@ fn main() {
     };
 
     let threads = if args.len() > 2 {
-        args[2].parse::<usize>().unwrap_or_else(|_| utils::num_cpus())
+        args[2]
+            .parse::<usize>()
+            .unwrap_or_else(|_| utils::num_cpus())
     } else {
         utils::num_cpus()
     };

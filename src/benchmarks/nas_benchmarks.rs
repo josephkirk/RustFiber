@@ -1,4 +1,4 @@
-use crate::utils::{BenchmarkResult, DataPoint, SystemInfo, num_cpus};
+use crate::utils::{BenchmarkResult, DataPoint, SystemInfo};
 use rustfiber::{JobSystem, PinningStrategy};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

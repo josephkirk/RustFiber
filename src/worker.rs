@@ -9,8 +9,8 @@ use crate::fiber::Fiber;
 use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
 /// A worker thread that executes jobs from a queue.
@@ -19,38 +19,33 @@ pub struct Worker {
     handle: Option<JoinHandle<()>>,
 }
 
+/// Parameters for creating a new worker thread.
+pub(crate) struct WorkerParams {
+    pub(crate) id: usize,
+    pub(crate) local_queue: Deque<Job>,
+    pub(crate) stealers: Arc<Vec<Stealer<Job>>>,
+    pub(crate) injector: Arc<Injector<Job>>,
+    pub(crate) shutdown: Arc<AtomicBool>,
+    pub(crate) active_workers: Arc<AtomicUsize>,
+    pub(crate) tier: u32,
+    pub(crate) threshold: usize,
+    pub(crate) core_id: Option<CoreId>,
+}
+
 impl Worker {
     /// Creates and starts a new worker thread with work-stealing support.
     ///
     /// The worker will continuously pull jobs from its local queue, steal from
     /// other workers when idle, and check the global injector.
-    pub fn new(
-        id: usize,
-        local_queue: Deque<Job>,
-        stealers: Arc<Vec<Stealer<Job>>>,
-        injector: Arc<Injector<Job>>,
-        shutdown: Arc<AtomicBool>,
-        core_id: Option<CoreId>,
-        active_workers: Arc<AtomicUsize>,
-        tier: u32,
-        threshold: usize,
-    ) -> Self {
+    pub(crate) fn new(params: WorkerParams) -> Self {
+        let id = params.id;
         let handle = thread::spawn(move || {
             // Pin worker to its core for better cache locality if specified
-            if let Some(core_id) = core_id {
+            if let Some(core_id) = params.core_id {
                 core_affinity::set_for_current(core_id);
             }
 
-            Worker::run_loop(
-                id,
-                local_queue,
-                stealers,
-                injector,
-                shutdown,
-                active_workers,
-                tier,
-                threshold,
-            );
+            Worker::run_loop(params);
         });
 
         Worker {
@@ -60,16 +55,18 @@ impl Worker {
     }
 
     /// Main execution loop for the worker thread with work-stealing.
-    fn run_loop(
-        _id: usize,
-        local_queue: Deque<Job>,
-        stealers: Arc<Vec<Stealer<Job>>>,
-        injector: Arc<Injector<Job>>,
-        shutdown: Arc<AtomicBool>,
-        active_workers: Arc<AtomicUsize>,
-        tier: u32,
-        threshold: usize,
-    ) {
+    fn run_loop(params: WorkerParams) {
+        let WorkerParams {
+            local_queue,
+            stealers,
+            injector,
+            shutdown,
+            active_workers,
+            tier,
+            threshold,
+            ..
+        } = params;
+
         loop {
             // Check for shutdown signal
             if shutdown.load(Ordering::Relaxed) {
@@ -225,8 +222,13 @@ impl WorkerPool {
                 // Tier 1: CCD0 Physical (first 8 physical cores)
                 let ccd0_physical: Vec<_> = core_ids.iter().step_by(2).take(8).copied().collect();
                 // Tier 2: CCD1 Physical (next 8 physical cores)
-                let ccd1_physical: Vec<_> =
-                    core_ids.iter().step_by(2).skip(8).take(8).copied().collect();
+                let ccd1_physical: Vec<_> = core_ids
+                    .iter()
+                    .step_by(2)
+                    .skip(8)
+                    .take(8)
+                    .copied()
+                    .collect();
                 // Tier 3: SMT (all remaining)
                 let smt_cores: Vec<_> = core_ids.iter().skip(1).step_by(2).copied().collect();
 
@@ -253,17 +255,17 @@ impl WorkerPool {
         // Spawn workers with their local queues, stealers, and core assignments
         for (id, local_queue) in local_queues.into_iter().enumerate() {
             let core_id = mapped_cores.get(id).copied().flatten();
-            workers.push(Worker::new(
+            workers.push(Worker::new(WorkerParams {
                 id,
                 local_queue,
-                Arc::clone(&stealers),
-                Arc::clone(&injector),
-                Arc::clone(&shutdown),
+                stealers: Arc::clone(&stealers),
+                injector: Arc::clone(&injector),
+                shutdown: Arc::clone(&shutdown),
                 core_id,
-                Arc::clone(&active_workers),
-                tiers[id],
-                thresholds[id],
-            ));
+                active_workers: Arc::clone(&active_workers),
+                tier: tiers[id],
+                threshold: thresholds[id],
+            }));
         }
 
         WorkerPool {
