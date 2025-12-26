@@ -334,10 +334,28 @@ impl JobSystem {
                         // If failed, we were SIGNALED. Fall through to yield.
                     }
                     
-                    // Yield execution. We will be resumed when the counter signals us.
-                    // tracing::debug!(fiber = ?fiber_handle.0, "Yielding...");
-                    Fiber::yield_now(crate::fiber::YieldType::Wait);
-                    // tracing::debug!(fiber = ?fiber_handle.0, "Resumed");
+                    // Wait loop with adaptive spinning
+                    const SPIN_LIMIT: usize = 100; // Tunable parameter
+                    let mut spin_count = 0;
+                    
+                    while !counter.is_complete() {
+                        if spin_count < SPIN_LIMIT {
+                            std::hint::spin_loop();
+                            spin_count += 1;
+                        } else {
+                            // Yield execution. We will be resumed when the counter signals us.
+                            // tracing::debug!(fiber = ?fiber_handle.0, "Yielding...");
+                            Fiber::yield_now(crate::fiber::YieldType::Wait);
+                            // tracing::debug!(fiber = ?fiber_handle.0, "Resumed");
+                            break;
+                        }
+                    }
+                    
+                    if counter.is_complete() {
+                        // If we unblocked via spin or yield-return, double check cleanup
+                        // Because WaitNode might still be in the list!
+                        // Logic below handles state transitions.
+                    }
                     
                     // On resume, reset state.
                     // NOTE: We wrap in loop to handle spurious wakeups essentially.
