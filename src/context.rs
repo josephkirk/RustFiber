@@ -3,7 +3,7 @@
 use crate::counter::Counter;
 use crate::job_system::JobSystem;
 use crate::fiber::Fiber;
-use crate::job::Job;
+// use crate::job::Job;
 
 /// Context provided to jobs for accessing fiber system capabilities.
 pub struct Context<'a> {

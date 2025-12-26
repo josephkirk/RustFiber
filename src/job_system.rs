@@ -307,7 +307,7 @@ impl JobSystem {
                 loop {
                     // Check completion first
                     if counter.is_complete() {
-                        tracing::debug!(fiber = ?fiber_handle.0, "Wait complete (pre-check)");
+                        // tracing::debug!(fiber = ?fiber_handle.0, "Wait complete (pre-check)");
                         return;
                     }
 
@@ -328,16 +328,16 @@ impl JobSystem {
                             Ordering::Relaxed
                         ).is_ok() {
                             // We successfully aborted the wait. Return immediately.
-                            tracing::debug!(fiber = ?fiber_handle.0, "Wait aborted (counter complete)");
+                            // tracing::debug!(fiber = ?fiber_handle.0, "Wait aborted (counter complete)");
                             return;
                         }
                         // If failed, we were SIGNALED. Fall through to yield.
                     }
                     
                     // Yield execution. We will be resumed when the counter signals us.
-                    tracing::debug!(fiber = ?fiber_handle.0, "Yielding...");
+                    // tracing::debug!(fiber = ?fiber_handle.0, "Yielding...");
                     Fiber::yield_now(crate::fiber::YieldType::Wait);
-                    tracing::debug!(fiber = ?fiber_handle.0, "Resumed");
+                    // tracing::debug!(fiber = ?fiber_handle.0, "Resumed");
                     
                     // On resume, reset state.
                     // NOTE: We wrap in loop to handle spurious wakeups essentially.

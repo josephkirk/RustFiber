@@ -68,9 +68,22 @@ impl Default for WaitNode {
 /// Represents a fiber - a lightweight stackful execution context.
 ///
 /// Uses `corosensei` for context switching.
+use corosensei::stack::DefaultStack;
+use corosensei::ScopedCoroutine;
+
+/// Represents a fiber - a lightweight stackful execution context.
+///
+/// Uses `corosensei` for context switching.
 pub struct Fiber {
     /// The underlying coroutine.
-    coroutine: Option<Coroutine<FiberInput, YieldType, ()>>,
+    /// 'static lifetime is a lie to make it self-referential safe in this context,
+    /// as we promise not to drop stack while coroutine exists.
+    /// Drop order: coroutine drops first, then stack.
+    coroutine: Option<ScopedCoroutine<'static, FiberInput, YieldType, (), &'static mut DefaultStack>>,
+
+    /// The stack backing the coroutine.
+    /// Owned here to allow reuse.
+    stack: Box<DefaultStack>,
     
     /// The intrusive node used when the fiber is waiting.
     /// Wrapped in UnsafeCell because it's modified by other threads while suspended.
@@ -94,8 +107,14 @@ thread_local! {
 
 impl Fiber {
     /// Creates a new fiber with the given stack size.
-    pub fn new(_stack_size: usize) -> Self {
-        let coroutine = Coroutine::new(move |yielder, input: FiberInput| {
+    pub fn new(stack_size: usize) -> Self {
+        let mut stack = Box::new(DefaultStack::new(stack_size).unwrap_or_else(|_| DefaultStack::new(1024 * 1024).unwrap()));
+        
+        // Extend lifetime of stack to 'static to satisfy Coroutine type.
+        // SAFETY: We ensure `coroutine` is dropped before `stack`.
+        let stack_ref = unsafe { std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(stack.as_mut()) };
+        
+        let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
             if let FiberInput::Start(job, injector_ptr, fiber_ptr) = input {
                 // Initialize yielder pointer in the Fiber struct.
                 // SAFETY: fiber_ptr is valid and pinned (Boxed in pool).
@@ -111,6 +130,7 @@ impl Fiber {
 
         Fiber {
             coroutine: Some(coroutine),
+            stack,
             wait_node: UnsafeCell::new(WaitNode::default()),
             yielder: std::ptr::null(),
         }
@@ -141,8 +161,25 @@ impl Fiber {
     
     /// Resets the fiber state for reuse.
     /// Recreates the coroutine to reset the stack.
-    pub fn reset(&mut self, stack_size: usize) {
-        *self = Fiber::new(stack_size);
+    pub fn reset(&mut self, _stack_size: usize) {
+        // Drop existing coroutine to free stack usage
+        self.coroutine = None;
+        
+        // Reuse existing stack
+        // Extend lifetime of stack to 'static to satisfy Coroutine type.
+        // SAFETY: We ensure `coroutine` is dropped before `stack`.
+        let stack_ref = unsafe { std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(self.stack.as_mut()) };
+        
+        let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
+            if let FiberInput::Start(job, injector_ptr, fiber_ptr) = input {
+                unsafe {
+                    (*fiber_ptr).yielder = yielder as *const _;
+                }
+                job.execute(injector_ptr);
+            }
+        });
+        
+        self.coroutine = Some(coroutine);
     }
     
     /// Yields execution of the current fiber.
