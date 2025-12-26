@@ -34,13 +34,12 @@ impl<'a> Context<'a> {
     }
 
     /// Yields execution to allow other work to run.
+    /// Yields execution to allow other work to run.
     pub fn yield_now(&self) {
-        if let Some(fiber_handle) = Fiber::current() {
-            // If running in a fiber, schedule resumption
-            let job = Job::resume_job(fiber_handle);
-            self.job_system.submit_to_injector(job);
-            // Suspend execution
-            Fiber::yield_now();
+        use crate::fiber::YieldType;
+        if Fiber::current().is_some() {
+            // Suspend execution and request rescheduling
+            Fiber::yield_now(YieldType::Normal);
         } else {
             // Fallback for non-fiber threads
             std::thread::yield_now();

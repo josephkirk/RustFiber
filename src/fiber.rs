@@ -35,6 +35,14 @@ pub enum FiberInput {
     Resume,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum YieldType {
+    /// Reschedule the fiber immediately (cooperative yield).
+    Normal,
+    /// suspend the fiber and wait for an external signal (intrusive wait).
+    Wait,
+}
+
 /// The node embedded in every Fiber for intrusive lists.
 /// Must be 'repr(C)' for stable pointer offsets.
 #[repr(C)]
@@ -62,7 +70,7 @@ impl Default for WaitNode {
 /// Uses `corosensei` for context switching.
 pub struct Fiber {
     /// The underlying coroutine.
-    coroutine: Option<Coroutine<FiberInput, (), ()>>,
+    coroutine: Option<Coroutine<FiberInput, YieldType, ()>>,
     
     /// The intrusive node used when the fiber is waiting.
     /// Wrapped in UnsafeCell because it's modified by other threads while suspended.
@@ -70,11 +78,11 @@ pub struct Fiber {
 
     /// The yielder for this fiber, set when the fiber starts.
     /// Valid only when the fiber is running.
-    yielder: *const Yielder<FiberInput, ()>,
+    yielder: *const Yielder<FiberInput, YieldType>,
 }
 
 pub enum FiberState {
-    Yielded,
+    Yielded(YieldType),
     Complete,
     Panic(Box<dyn std::any::Any + Send>),
 }
@@ -122,7 +130,7 @@ impl Fiber {
             CURRENT_FIBER.set(None);
             
             match result {
-                Ok(CoroutineResult::Yield(_)) => FiberState::Yielded,
+                Ok(CoroutineResult::Yield(y_type)) => FiberState::Yielded(y_type),
                 Ok(CoroutineResult::Return(_)) => FiberState::Complete,
                 Err(payload) => FiberState::Panic(payload),
             }
@@ -138,7 +146,7 @@ impl Fiber {
     }
     
     /// Yields execution of the current fiber.
-    pub fn yield_now() {
+    pub fn yield_now(reason: YieldType) {
         if let Some(handle) = CURRENT_FIBER.get() {
             // We are running inside a fiber.
             // Access the yielder stored in the fiber.
@@ -147,7 +155,7 @@ impl Fiber {
                 let fiber = &*handle.0;
                 if !fiber.yielder.is_null() {
                     let yielder = &*fiber.yielder;
-                    yielder.suspend(());
+                    yielder.suspend(reason);
                 } else {
                      // Should not happen if initialized correctly
                      panic!("Fiber yielded without initialized yielder!");

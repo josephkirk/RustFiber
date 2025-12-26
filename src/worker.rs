@@ -145,8 +145,20 @@ impl Worker {
                         FiberState::Complete => {
                             fiber_pool.return_fiber(fiber);
                         }
-                        FiberState::Yielded => {
-                            let _ = Box::into_raw(fiber);
+                        FiberState::Yielded(reason) => {
+                            let raw_fiber = Box::into_raw(fiber);
+                            if let crate::fiber::YieldType::Normal = reason {
+                                // Reschedule the fiber immediately
+                                // SAFETY: The injector pointer is valid for the worker's lifetime
+                                let injector_ptr = &*injector as *const Injector<Job>;
+                                // Reclaim raw pointer safely into a Handle job
+                                let handle = crate::fiber::FiberHandle(raw_fiber);
+                                let job = Job::resume_job(handle);
+                                
+                                unsafe {
+                                    (*injector_ptr).push(job);
+                                }
+                            }
                         }
                         FiberState::Panic(err) => {
                             let msg = if let Some(s) = err.downcast_ref::<&str>() {

@@ -336,7 +336,7 @@ impl JobSystem {
                     
                     // Yield execution. We will be resumed when the counter signals us.
                     tracing::debug!(fiber = ?fiber_handle.0, "Yielding...");
-                    Fiber::yield_now();
+                    Fiber::yield_now(crate::fiber::YieldType::Wait);
                     tracing::debug!(fiber = ?fiber_handle.0, "Resumed");
                     
                     // On resume, reset state.
