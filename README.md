@@ -96,15 +96,15 @@ python3 run_benchmarks.py
 
 This will test the system with:
 1. **Million Tiny Tasks (Fibonacci)** - Task creation and scheduling efficiency
-   ![Fibonacci Strategy Comparison](./docs/comparison_strategies_benchmark_1_million_tiny_tasks_fibonacci.png)
+   ![Fibonacci Strategy Comparison](./docs/comparison_cores_benchmark_1_million_tiny_tasks_fibonacci.png)
 2. **Recursive Task Decomposition (QuickSort)** - Work-stealing efficiency
-   ![QuickSort Strategy Comparison](./docs/comparison_strategies_benchmark_2_recursive_task_decomposition_quicksort.png)
+   ![QuickSort Strategy Comparison](./docs/comparison_cores_benchmark_2_recursive_task_decomposition_quicksort.png)
 3. **Producer-Consumer Stress Test** - Throughput under contention
-   ![Producer-Consumer Strategy Comparison](./docs/comparison_strategies_benchmark_3_producer-consumer_stress_test.png)
+   ![Producer-Consumer Strategy Comparison](./docs/comparison_cores_benchmark_3_producer-consumer_stress_test.png)
 4. **NAS Parallel Benchmarks** - Real-world computational patterns (EP, MG, CG)
-   ![NAS EP Strategy Comparison](./docs/comparison_strategies_benchmark_4a_nas_ep_embarrassingly_parallel.png)
-   ![NAS MG Strategy Comparison](./docs/comparison_strategies_benchmark_4b_nas_mg_multi-grid.png)
-   ![NAS CG Strategy Comparison](./docs/comparison_strategies_benchmark_4c_nas_cg_conjugate_gradient.png)
+   ![NAS EP Strategy Comparison](./docs/comparison_cores_benchmark_4a_nas_ep_embarrassingly_parallel.png)
+   ![NAS MG Strategy Comparison](./docs/comparison_cores_benchmark_4b_nas_mg_multi-grid.png)
+   ![NAS CG Strategy Comparison](./docs/comparison_cores_benchmark_4c_nas_cg_conjugate_gradient.png)
 
 Benchmark results and graphs are saved to the `docs/` folder.
 
