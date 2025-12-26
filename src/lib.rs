@@ -35,6 +35,7 @@ pub mod fiber;
 pub mod job;
 pub mod job_system;
 pub mod worker;
+pub mod fiber_pool;
 
 use serde::{Deserialize, Serialize};
 

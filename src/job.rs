@@ -6,8 +6,10 @@
 use crate::context::Context;
 use crate::counter::Counter;
 
+use crate::fiber::FiberHandle;
+
 /// Internal representation of work to be executed.
-enum Work {
+pub enum Work {
     /// Simple closure without context
     Simple(Box<dyn FnOnce() + Send + 'static>),
     /// Closure that requires context, along with JobSystem reference
@@ -15,6 +17,8 @@ enum Work {
         work: Box<dyn FnOnce(&Context) + Send + 'static>,
         job_system_ptr: usize, // Store as usize to make it Send
     },
+    /// Resumption of a suspended fiber
+    Resume(FiberHandle),
 }
 
 /// A unit of work to be executed by the job system.
@@ -23,9 +27,9 @@ enum Work {
 /// that is decremented upon completion.
 pub struct Job {
     /// The work to be executed
-    work: Work,
+    pub work: Work,
     /// Optional counter to decrement when the job completes
-    counter: Option<Counter>,
+    pub(crate) counter: Option<Counter>,
 }
 
 impl Job {
@@ -37,6 +41,14 @@ impl Job {
         Job {
             work: Work::Simple(Box::new(work)),
             counter: None,
+        }
+    }
+
+    /// Creates a new job that resumes a suspended fiber.
+    pub fn resume_job(handle: FiberHandle) -> Self {
+        Job {
+             work: Work::Resume(handle),
+             counter: None,
         }
     }
 
@@ -76,7 +88,10 @@ impl Job {
     }
 
     /// Executes the job and decrements its counter if present.
-    pub fn execute(self) {
+    pub fn execute(self, injector_ptr: *const crossbeam::deque::Injector<Job>) {
+        // SAFETY: injector_ptr is guaranteed valid by the worker
+        let injector = unsafe { &*injector_ptr };
+        
         match self.work {
             Work::Simple(work) => work(),
             Work::WithContext {
@@ -84,8 +99,6 @@ impl Job {
                 job_system_ptr,
             } => {
                 // SAFETY: The JobSystem is guaranteed to outlive the jobs it creates.
-                // Jobs are executed before JobSystem::shutdown() completes.
-                // Debug assertion to catch any corruption in development.
                 debug_assert_ne!(job_system_ptr, 0, "JobSystem pointer cannot be null");
                 debug_assert!(
                     job_system_ptr % std::mem::align_of::<crate::job_system::JobSystem>() == 0,
@@ -98,10 +111,13 @@ impl Job {
                     work(&context);
                 }
             }
+            Work::Resume(_) => {
+                panic!("Cannot execute a Resume job directly. Must be handled by worker loop.");
+            }
         }
 
         if let Some(counter) = self.counter {
-            counter.decrement();
+            counter.decrement(injector);
         }
     }
 }
@@ -111,6 +127,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use crossbeam::deque::Injector;
 
     #[test]
     fn test_job_execution() {
@@ -121,7 +138,9 @@ mod tests {
             executed_clone.store(true, Ordering::SeqCst);
         });
 
-        job.execute();
+        let injector = Injector::new();
+        let injector_ptr = &injector as *const _;
+        job.execute(injector_ptr);
         assert!(executed.load(Ordering::SeqCst));
     }
 
@@ -138,7 +157,12 @@ mod tests {
         );
 
         assert_eq!(counter.value(), 1);
-        job.execute();
+        let injector = Injector::new();
+        let injector_ptr = &injector as *const _;
+        job.execute(injector_ptr);
+        
+        // Note: Decrement logic requires valid injector if waiters exist.
+        // Here no waiters, so safe.
         assert_eq!(counter.value(), 0);
     }
 }

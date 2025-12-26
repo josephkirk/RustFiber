@@ -88,6 +88,13 @@ fn test_recursive_parallel_decomposition() {
 
 #[test]
 fn test_producer_consumer_pattern() {
+    // Initialize tracing
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .try_init();
+
     // Test producer-consumer pattern where producers spawn work and consumers process it
     let job_system = JobSystem::new(4);
     let items_produced = Arc::new(AtomicUsize::new(0));
@@ -101,21 +108,23 @@ fn test_producer_consumer_pattern() {
         let num_items = 20;
         let mut consumer_counters = vec![];
 
-        for _ in 0..num_items {
+        for i in 0..num_items {
             produced.fetch_add(1, Ordering::SeqCst);
             let consumed_clone = consumed.clone();
 
             let consumer = ctx.spawn_job(move |_ctx| {
-                // Simulate consuming/processing the item (reduced for faster tests)
+                // Simulate consuming/processing the item
                 std::thread::sleep(Duration::from_micros(10));
                 consumed_clone.fetch_add(1, Ordering::SeqCst);
+                println!("Consumer {} finished", i);
             });
             consumer_counters.push(consumer);
         }
 
         // Wait for all consumers to finish
-        for counter in consumer_counters {
-            ctx.wait_for(&counter);
+        for (i, counter) in consumer_counters.iter().enumerate() {
+            ctx.wait_for(counter);
+            println!("Waited for consumer {}", i);
         }
     });
 
