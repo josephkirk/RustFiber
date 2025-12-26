@@ -31,7 +31,7 @@ pub const NODE_STATE_WAITING: u32 = 1;
 pub const NODE_STATE_SIGNALED: u32 = 2;
 
 pub enum FiberInput {
-    Start(Job, *const Injector<Job>, *mut Fiber),
+    Start(Job, *const dyn crate::counter::JobScheduler, *mut Fiber),
     Resume,
 }
 
@@ -115,14 +115,17 @@ impl Fiber {
         let stack_ref = unsafe { std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(stack.as_mut()) };
         
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, injector_ptr, fiber_ptr) = input {
+            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr) = input {
                 // Initialize yielder pointer in the Fiber struct.
                 // SAFETY: fiber_ptr is valid and pinned (Boxed in pool).
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;
+                    
+                    // Execute the job using the provided scheduler
+                    // SAFETY: The scheduler reference is pinned/valid for the job execution.
+                    let scheduler = &*scheduler_ptr;
+                    job.execute(scheduler);
                 }
-
-                job.execute(injector_ptr);
             } else {
                 // Logic error: effectively a no-op or panic
             }
@@ -171,11 +174,14 @@ impl Fiber {
         let stack_ref = unsafe { std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(self.stack.as_mut()) };
         
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, injector_ptr, fiber_ptr) = input {
+            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr) = input {
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;
                 }
-                job.execute(injector_ptr);
+                
+                // SAFETY: scheduler_ptr is valid
+                let scheduler = unsafe { &*scheduler_ptr };
+                job.execute(scheduler);
             }
         });
         

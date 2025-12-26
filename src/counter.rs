@@ -4,7 +4,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use crate::fiber::{WaitNode, NODE_STATE_WAITING, NODE_STATE_SIGNALED};
 use crate::job::Job;
-use crossbeam::deque::Injector;
+use crossbeam::deque::{Injector, Worker};
+
+/// Trait for scheduling jobs to a queue (Global or Local).
+pub trait JobScheduler {
+    fn schedule(&self, job: Job);
+}
+
+impl JobScheduler for Injector<Job> {
+    fn schedule(&self, job: Job) {
+        self.push(job);
+    }
+}
+
+impl JobScheduler for Worker<Job> {
+    fn schedule(&self, job: Job) {
+        self.push(job);
+    }
+}
 
 struct InnerCounter {
     value: AtomicUsize,
@@ -36,7 +53,10 @@ impl Counter {
     /// Decrements the counter by one and wakes waiting fibers if zero.
     ///
     /// Returns true if the counter reached zero.
-    pub fn decrement(&self, injector: &Injector<Job>) -> bool {
+    /// Decrements the counter by one and wakes waiting fibers if zero.
+    ///
+    /// Returns true if the counter reached zero.
+    pub fn decrement<S: JobScheduler + ?Sized>(&self, scheduler: &S) -> bool {
         // Use Release ordering so that all prior work is visible to woken fibers
         let old_val = self.inner.value.fetch_sub(1, Ordering::Release);
         if old_val == 1 {
@@ -61,7 +81,7 @@ impl Counter {
                          ).is_ok() {
                              // Successfully transitioned to signaled. Push to injector.
                             let job = Job::resume_job(node.fiber_handle);
-                            injector.push(job);
+                            scheduler.schedule(job);
                          } 
                          // If state was RUNNING, the waiter aborted wait.
                          // If state was SIGNALED, double signal (should not happen in this design).

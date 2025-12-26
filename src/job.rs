@@ -88,10 +88,7 @@ impl Job {
     }
 
     /// Executes the job and decrements its counter if present.
-    pub fn execute(self, injector_ptr: *const crossbeam::deque::Injector<Job>) {
-        // SAFETY: injector_ptr is guaranteed valid by the worker
-        let injector = unsafe { &*injector_ptr };
-        
+    pub fn execute(self, scheduler: &dyn crate::counter::JobScheduler) {
         match self.work {
             Work::Simple(work) => work(),
             Work::WithContext {
@@ -117,7 +114,7 @@ impl Job {
         }
 
         if let Some(counter) = self.counter {
-            counter.decrement(injector);
+            counter.decrement(scheduler);
         }
     }
 }
@@ -128,6 +125,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use crossbeam::deque::Injector;
+    use crate::counter::JobScheduler; // Import trait
 
     #[test]
     fn test_job_execution() {
@@ -139,8 +137,8 @@ mod tests {
         });
 
         let injector = Injector::new();
-        let injector_ptr = &injector as *const _;
-        job.execute(injector_ptr);
+        // Pass injector as scheduler
+        job.execute(&injector);
         assert!(executed.load(Ordering::SeqCst));
     }
 

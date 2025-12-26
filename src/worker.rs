@@ -132,9 +132,13 @@ impl Worker {
                             let mut fiber = fiber_pool.get();
                             // Reconstruct job (we moved work out)
                             let job = Job { work, counter: job.counter }; 
-                            let injector_ptr = &*injector as *const Injector<Job>;
+                            
+                            // Use local queue as scheduler for immediate wakeup locality
+                            let scheduler: &dyn crate::counter::JobScheduler = &local_queue;
+                            let scheduler_ptr = scheduler as *const dyn crate::counter::JobScheduler;
+                            
                             let fiber_ptr = fiber.as_mut() as *mut crate::fiber::Fiber;
-                            (fiber, FiberInput::Start(job, injector_ptr, fiber_ptr))
+                            (fiber, FiberInput::Start(job, scheduler_ptr, fiber_ptr))
                         }
                     };
 
@@ -148,16 +152,11 @@ impl Worker {
                         FiberState::Yielded(reason) => {
                             let raw_fiber = Box::into_raw(fiber);
                             if let crate::fiber::YieldType::Normal = reason {
-                                // Reschedule the fiber immediately
-                                // SAFETY: The injector pointer is valid for the worker's lifetime
-                                let injector_ptr = &*injector as *const Injector<Job>;
-                                // Reclaim raw pointer safely into a Handle job
+                                // Reschedule the fiber immediately to LOCAL queue
+                                // SAFETY: The local_queue reference is valid
                                 let handle = crate::fiber::FiberHandle(raw_fiber);
                                 let job = Job::resume_job(handle);
-                                
-                                unsafe {
-                                    (*injector_ptr).push(job);
-                                }
+                                local_queue.push(job);
                             }
                         }
                         FiberState::Panic(err) => {

@@ -335,7 +335,7 @@ impl JobSystem {
                     }
                     
                     // Wait loop with adaptive spinning
-                    const SPIN_LIMIT: usize = 100; // Tunable parameter
+                    const SPIN_LIMIT: usize = 2000; // Tuned for ~1us latency
                     let mut spin_count = 0;
                     
                     while !counter.is_complete() {
