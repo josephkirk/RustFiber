@@ -6,8 +6,8 @@
 
 use crate::PinningStrategy;
 use crate::fiber::{FiberInput, FiberState};
-use crate::job::Job;
 use crate::fiber_pool::FiberPool;
+use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use std::sync::Arc;
@@ -43,7 +43,7 @@ impl Worker {
     pub(crate) fn new(params: WorkerParams) -> Self {
         let id = params.id;
         let handle = thread::spawn(move || {
-             // Pin worker to its core for better cache locality if specified
+            // Pin worker to its core for better cache locality if specified
             if let Some(core_id) = params.core_id {
                 core_affinity::set_for_current(core_id);
             }
@@ -79,11 +79,10 @@ impl Worker {
             }
 
             // Tiered Spillover Logic: Stay dormant if load is below threshold
-            if tier > 1 && active_workers.load(Ordering::Relaxed) < threshold {
-                if injector.is_empty() {
-                    thread::yield_now();
-                    continue;
-                }
+            if tier > 1 && active_workers.load(Ordering::Relaxed) < threshold && injector.is_empty()
+            {
+                thread::yield_now();
+                continue;
             }
 
             // Try to get a job: Local -> Global -> Steal
@@ -120,7 +119,7 @@ impl Worker {
                 Some(job) => {
                     // Mark as active before running
                     active_workers.fetch_add(1, Ordering::Relaxed);
-                    
+
                     let (mut fiber, input) = match job.work {
                         crate::job::Work::Resume(handle) => {
                             // Resume suspended fiber
@@ -133,15 +132,19 @@ impl Worker {
                             // New job - acquire fiber from pool
                             let mut fiber = fiber_pool.get();
                             // Reconstruct job (we moved work out)
-                            let job = Job { work, counter: job.counter }; 
-                            
+                            let job = Job {
+                                work,
+                                counter: job.counter,
+                            };
+
                             // Use local queue as scheduler for immediate wakeup locality if strategy permits
                             let scheduler: &dyn crate::counter::JobScheduler = match strategy {
                                 crate::PinningStrategy::TieredSpillover => &*injector,
                                 _ => &local_queue,
                             };
-                            let scheduler_ptr = scheduler as *const dyn crate::counter::JobScheduler;
-                            
+                            let scheduler_ptr =
+                                scheduler as *const dyn crate::counter::JobScheduler;
+
                             let fiber_ptr = fiber.as_mut() as *mut crate::fiber::Fiber;
                             (fiber, FiberInput::Start(job, scheduler_ptr, fiber_ptr))
                         }
@@ -149,7 +152,7 @@ impl Worker {
 
                     // Run the fiber
                     let state = fiber.resume(input);
-                    
+
                     match state {
                         FiberState::Complete => {
                             fiber_pool.return_fiber(fiber);
@@ -160,19 +163,17 @@ impl Worker {
                                 // Reschedule dependent on strategy
                                 let handle = crate::fiber::FiberHandle(raw_fiber);
                                 let job = Job::resume_job(handle);
-                                
+
                                 match strategy {
-                                     crate::PinningStrategy::TieredSpillover => {
-                                         // Push to global injector to wake up dormant threads
-                                         unsafe {
-                                             let injector_ptr = &*injector as *const Injector<Job>;
-                                             (*injector_ptr).push(job);
-                                         }
-                                     }
-                                     _ => {
-                                         // Keep local for other strategies
-                                         local_queue.push(job);
-                                     }
+                                    crate::PinningStrategy::TieredSpillover => {
+                                        // Push to global injector to wake up dormant threads
+                                        // Push to global injector to wake up dormant threads
+                                        injector.push(job);
+                                    }
+                                    _ => {
+                                        // Keep local for other strategies
+                                        local_queue.push(job);
+                                    }
                                 }
                             }
                         }
@@ -192,7 +193,7 @@ impl Worker {
                     active_workers.fetch_sub(1, Ordering::Relaxed);
                 }
                 None => {
-                     // No work available, brief spin then yield
+                    // No work available, brief spin then yield
                     std::thread::yield_now();
                 }
             }
@@ -246,9 +247,9 @@ impl WorkerPool {
         let injector = Arc::new(Injector::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let active_workers = Arc::new(AtomicUsize::new(0));
-        // Default stack size 2MB for safety, pool size 128 per thread.
-        let fiber_pool = Arc::new(FiberPool::new(num_threads * 128, 2 * 1024 * 1024));
-        
+        // Default stack size 512KB, pool size 128 per thread.
+        let fiber_pool = Arc::new(FiberPool::new(num_threads * 128, 512 * 1024));
+
         let mut local_queues = Vec::with_capacity(num_threads);
         let mut stealers = Vec::with_capacity(num_threads);
 
@@ -379,7 +380,8 @@ impl WorkerPool {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
-        self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
 
         let mut failed_count = 0;
         for worker in self.workers {

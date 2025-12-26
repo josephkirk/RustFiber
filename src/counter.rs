@@ -1,12 +1,11 @@
 //! Counter-based synchronization primitives for job completion tracking.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
-use crate::fiber::{WaitNode, NODE_STATE_WAITING, NODE_STATE_SIGNALED};
+use crate::fiber::{NODE_STATE_SIGNALED, NODE_STATE_SPINNING, NODE_STATE_WAITING, WaitNode};
 use crate::job::Job;
 use crossbeam::deque::{Injector, Worker};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-/// Trait for scheduling jobs to a queue (Global or Local).
 pub trait JobScheduler {
     fn schedule(&self, job: Job);
 }
@@ -62,31 +61,58 @@ impl Counter {
         if old_val == 1 {
             // Counter reached zero. Wake all waiters.
             // Acquire ensures we see the node linking done by waiters.
-            let mut head = self.inner.wait_list.swap(std::ptr::null_mut(), Ordering::Acquire);
-            
+            let mut head = self
+                .inner
+                .wait_list
+                .swap(std::ptr::null_mut(), Ordering::Acquire);
+
             // Batch wake
             while !head.is_null() {
                 unsafe {
                     let node = &*head;
                     let next_node = node.next.load(Ordering::Relaxed);
-                    
+
                     // Recover the fiber handle and schedule it
                     if !node.fiber_handle.is_null() {
-                        // Attempt to signal the node
-                         if node.state.compare_exchange(
-                             NODE_STATE_WAITING,
-                             NODE_STATE_SIGNALED,
-                             Ordering::AcqRel,
-                             Ordering::Relaxed
-                         ).is_ok() {
-                             // Successfully transitioned to signaled. Push to injector.
-                            let job = Job::resume_job(node.fiber_handle);
-                            scheduler.schedule(job);
-                         } 
-                         // If state was RUNNING, the waiter aborted wait.
-                         // If state was SIGNALED, double signal (should not happen in this design).
+                        // Optimistic check to avoid expensive CAS loop
+                        let mut current_state = node.state.load(Ordering::Relaxed);
+
+                        loop {
+                            if current_state == NODE_STATE_WAITING {
+                                match node.state.compare_exchange_weak(
+                                    NODE_STATE_WAITING,
+                                    NODE_STATE_SIGNALED,
+                                    Ordering::AcqRel,
+                                    Ordering::Relaxed,
+                                ) {
+                                    Ok(_) => {
+                                        // Successfully transitioned to signaled. Push to injector.
+                                        let job = Job::resume_job(node.fiber_handle);
+                                        scheduler.schedule(job);
+                                        break;
+                                    }
+                                    Err(actual) => current_state = actual,
+                                }
+                            } else if current_state == NODE_STATE_SPINNING {
+                                match node.state.compare_exchange_weak(
+                                    NODE_STATE_SPINNING,
+                                    NODE_STATE_SIGNALED,
+                                    Ordering::AcqRel,
+                                    Ordering::Relaxed,
+                                ) {
+                                    Ok(_) => {
+                                        // Spinner will wake itself up. Do NOT enqueue.
+                                        break;
+                                    }
+                                    Err(actual) => current_state = actual,
+                                }
+                            } else {
+                                // Already RUNNING or SIGNALED.
+                                break;
+                            }
+                        }
                     }
-                    
+
                     head = next_node;
                 }
             }
@@ -95,30 +121,30 @@ impl Counter {
             false
         }
     }
-    
+
     /// Adds a waiter to the intrusive list.
-    /// 
+    ///
     /// # Safety
     /// The `wait_node` must be pinned/stable in memory.
     pub unsafe fn add_waiter(&self, wait_node: *mut WaitNode) {
-         unsafe {
-             let mut current_head = self.inner.wait_list.load(Ordering::Relaxed);
-             loop {
-                 // Link node -> current_head
-                 (*wait_node).next.store(current_head, Ordering::Relaxed);
-                 
-                 // CAS head -> node
-                 match self.inner.wait_list.compare_exchange_weak(
-                     current_head,
-                     wait_node,
-                     Ordering::Release,
-                     Ordering::Relaxed,
-                 ) {
-                     Ok(_) => break,
-                     Err(new_head) => current_head = new_head,
-                 }
-             }
-         }
+        unsafe {
+            let mut current_head = self.inner.wait_list.load(Ordering::Relaxed);
+            loop {
+                // Link node -> current_head
+                (*wait_node).next.store(current_head, Ordering::Relaxed);
+
+                // CAS head -> node
+                match self.inner.wait_list.compare_exchange_weak(
+                    current_head,
+                    wait_node,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(new_head) => current_head = new_head,
+                }
+            }
+        }
     }
 
     /// Returns the current value of the counter.
@@ -130,7 +156,7 @@ impl Counter {
     pub fn is_complete(&self) -> bool {
         self.value() == 0
     }
-    
+
     // Test helper
     pub fn reset(&self, value: usize) {
         self.inner.value.store(value, Ordering::SeqCst);

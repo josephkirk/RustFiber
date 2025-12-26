@@ -15,11 +15,8 @@ impl FiberPool {
         for _ in 0..initial_count {
             pool.push(Box::new(Fiber::new(stack_size)));
         }
-        
-        FiberPool {
-            pool,
-            stack_size,
-        }
+
+        FiberPool { pool, stack_size }
     }
 
     /// Retrieves a fiber from the pool or creates a new one if empty.

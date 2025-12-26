@@ -47,8 +47,8 @@ impl Job {
     /// Creates a new job that resumes a suspended fiber.
     pub fn resume_job(handle: FiberHandle) -> Self {
         Job {
-             work: Work::Resume(handle),
-             counter: None,
+            work: Work::Resume(handle),
+            counter: None,
         }
     }
 
@@ -122,10 +122,10 @@ impl Job {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+
     use crossbeam::deque::Injector;
-    use crate::counter::JobScheduler; // Import trait
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering}; // Import trait
 
     #[test]
     fn test_job_execution() {
@@ -156,9 +156,8 @@ mod tests {
 
         assert_eq!(counter.value(), 1);
         let injector = Injector::new();
-        let injector_ptr = &injector as *const _;
-        job.execute(injector_ptr);
-        
+        job.execute(&injector);
+
         // Note: Decrement logic requires valid injector if waiters exist.
         // Here no waiters, so safe.
         assert_eq!(counter.value(), 0);

@@ -5,9 +5,9 @@
 
 use crate::job::Job;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
+
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicPtr, AtomicU32};
-use crossbeam::deque::Injector;
 
 // Re-export FiberHandle as a wrapper for raw pointer to allow Send/Sync
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,7 +20,7 @@ impl FiberHandle {
     pub fn is_null(&self) -> bool {
         self.0.is_null()
     }
-    
+
     pub fn null() -> Self {
         FiberHandle(std::ptr::null_mut())
     }
@@ -29,6 +29,7 @@ impl FiberHandle {
 pub const NODE_STATE_RUNNING: u32 = 0;
 pub const NODE_STATE_WAITING: u32 = 1;
 pub const NODE_STATE_SIGNALED: u32 = 2;
+pub const NODE_STATE_SPINNING: u32 = 3;
 
 pub enum FiberInput {
     Start(Job, *const dyn crate::counter::JobScheduler, *mut Fiber),
@@ -65,11 +66,11 @@ impl Default for WaitNode {
     }
 }
 
+use corosensei::ScopedCoroutine;
 /// Represents a fiber - a lightweight stackful execution context.
 ///
 /// Uses `corosensei` for context switching.
 use corosensei::stack::DefaultStack;
-use corosensei::ScopedCoroutine;
 
 /// Represents a fiber - a lightweight stackful execution context.
 ///
@@ -79,12 +80,13 @@ pub struct Fiber {
     /// 'static lifetime is a lie to make it self-referential safe in this context,
     /// as we promise not to drop stack while coroutine exists.
     /// Drop order: coroutine drops first, then stack.
-    coroutine: Option<ScopedCoroutine<'static, FiberInput, YieldType, (), &'static mut DefaultStack>>,
+    coroutine:
+        Option<ScopedCoroutine<'static, FiberInput, YieldType, (), &'static mut DefaultStack>>,
 
     /// The stack backing the coroutine.
     /// Owned here to allow reuse.
     stack: Box<DefaultStack>,
-    
+
     /// The intrusive node used when the fiber is waiting.
     /// Wrapped in UnsafeCell because it's modified by other threads while suspended.
     pub wait_node: UnsafeCell<WaitNode>,
@@ -108,19 +110,24 @@ thread_local! {
 impl Fiber {
     /// Creates a new fiber with the given stack size.
     pub fn new(stack_size: usize) -> Self {
-        let mut stack = Box::new(DefaultStack::new(stack_size).unwrap_or_else(|_| DefaultStack::new(1024 * 1024).unwrap()));
-        
+        let mut stack = Box::new(
+            DefaultStack::new(stack_size)
+                .unwrap_or_else(|_| DefaultStack::new(1024 * 1024).unwrap()),
+        );
+
         // Extend lifetime of stack to 'static to satisfy Coroutine type.
         // SAFETY: We ensure `coroutine` is dropped before `stack`.
-        let stack_ref = unsafe { std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(stack.as_mut()) };
-        
+        let stack_ref = unsafe {
+            std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(stack.as_mut())
+        };
+
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
             if let FiberInput::Start(job, scheduler_ptr, fiber_ptr) = input {
                 // Initialize yielder pointer in the Fiber struct.
                 // SAFETY: fiber_ptr is valid and pinned (Boxed in pool).
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;
-                    
+
                     // Execute the job using the provided scheduler
                     // SAFETY: The scheduler reference is pinned/valid for the job execution.
                     let scheduler = &*scheduler_ptr;
@@ -145,13 +152,12 @@ impl Fiber {
         if let Some(coroutine) = self.coroutine.as_mut() {
             // Set current fiber for introspection/scheduling logic
             CURRENT_FIBER.set(Some(FiberHandle(self_ptr)));
-            
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                coroutine.resume(input)
-            }));
-            
+
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| coroutine.resume(input)));
+
             CURRENT_FIBER.set(None);
-            
+
             match result {
                 Ok(CoroutineResult::Yield(y_type)) => FiberState::Yielded(y_type),
                 Ok(CoroutineResult::Return(_)) => FiberState::Complete,
@@ -161,33 +167,35 @@ impl Fiber {
             FiberState::Complete
         }
     }
-    
+
     /// Resets the fiber state for reuse.
     /// Recreates the coroutine to reset the stack.
     pub fn reset(&mut self, _stack_size: usize) {
         // Drop existing coroutine to free stack usage
         self.coroutine = None;
-        
+
         // Reuse existing stack
         // Extend lifetime of stack to 'static to satisfy Coroutine type.
         // SAFETY: We ensure `coroutine` is dropped before `stack`.
-        let stack_ref = unsafe { std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(self.stack.as_mut()) };
-        
+        let stack_ref = unsafe {
+            std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(self.stack.as_mut())
+        };
+
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
             if let FiberInput::Start(job, scheduler_ptr, fiber_ptr) = input {
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;
                 }
-                
+
                 // SAFETY: scheduler_ptr is valid
                 let scheduler = unsafe { &*scheduler_ptr };
                 job.execute(scheduler);
             }
         });
-        
+
         self.coroutine = Some(coroutine);
     }
-    
+
     /// Yields execution of the current fiber.
     pub fn yield_now(reason: YieldType) {
         if let Some(handle) = CURRENT_FIBER.get() {
@@ -200,8 +208,8 @@ impl Fiber {
                     let yielder = &*fiber.yielder;
                     yielder.suspend(reason);
                 } else {
-                     // Should not happen if initialized correctly
-                     panic!("Fiber yielded without initialized yielder!");
+                    // Should not happen if initialized correctly
+                    panic!("Fiber yielded without initialized yielder!");
                 }
             }
         } else {
@@ -209,7 +217,7 @@ impl Fiber {
             std::thread::yield_now();
         }
     }
-    
+
     /// Helper to get the current fiber's handle (pointer).
     pub fn current() -> Option<FiberHandle> {
         CURRENT_FIBER.get()

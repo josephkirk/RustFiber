@@ -50,7 +50,6 @@ fn main() {
     eprintln!("4. NAS Parallel Benchmarks (EP, MG, CG)");
     eprintln!("\n=======================================================\n");
 
-    // Run benchmarks one by one and output JSON for each immediately
     let runs: Vec<fn(PinningStrategy, usize) -> utils::BenchmarkResult> = vec![
         run_fibonacci_benchmark,
         run_quicksort_benchmark,

@@ -1,8 +1,8 @@
 //! Context type for safe access to job system capabilities from within jobs.
 
 use crate::counter::Counter;
-use crate::job_system::JobSystem;
 use crate::fiber::Fiber;
+use crate::job_system::JobSystem;
 // use crate::job::Job;
 
 /// Context provided to jobs for accessing fiber system capabilities.
@@ -49,9 +49,6 @@ impl<'a> Context<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Re-enable tests later (currently context tests use JobSystem::new which spawns threads)
 }
