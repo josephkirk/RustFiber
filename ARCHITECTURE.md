@@ -44,9 +44,9 @@ The system spawns `N` worker threads (where `N` = logical cores).
 
 ### 3.2 Scheduling: Work Stealing
 We use a **Chase-Lev Work-Stealing Deque** (via `crossbeam-deque`).
-- **Local Queue**: Workers push/pop to their own LIFO queue (Hot cache optimization).
-- **Stealing**: If a worker runs out of work, it attempts to steal from the *top* (FIFO) of other workers' queues.
-- **Global Injector**: Handles entry-point jobs from external threads.
+- **Local Queue (LIFO)**: Workers push/pop to their own deque. LIFO order ensures hot cache locality (most recently added job is executed first).
+- **Stealing (FIFO)**: If a worker runs out of work, it steals from the *top* (FIFO) of other workers' queues. This minimizes conflict with the owner (who operates on the bottom).
+- **Global Injector**: Handles entry-point jobs from external threads. Accessed only after local work and stealing attempts fail.
 
 ---
 
@@ -58,11 +58,14 @@ Allocating new stacks for every fiber is prohibitive (`mmap` syscalls).
 - **Mechanism**: When a fiber completes, its stack is reset (rewind stack pointer) rather than deallocated. This reduced fiber allocation cost to near-zero.
 - **Impact**: Removing allocation overhead was critical to achieving >6M jobs/sec.
 
-### 4.2 Adaptive Spinning
-Context switching, even in user space, has overhead (~50ns + cache pollution).
-- **Problem**: Yielding immediately for a very short dependency (nanoseconds) is inefficient.
-- **Solution**: `wait_for_counter` implements **Adaptive Spinning**. It spins for a calibrated number of cycles (`SPIN_LIMIT = 2000`) before yielding.
-- **Result**: Drastically reduced latency for fine-grained dependency chains.
+### 4.2 Intelligent Backoff & SMT Mitigation
+Efficiently handling idle states is crucial for both power and performance (especially on SMT/Hyperthreading).
+- **Tiered Backoff**: Workers use a 3-stage backoff strategy when no work is found:
+    1.  **Spinning**: Brief tight loop to catch immediately arriving work (lowest latency).
+    2.  **Yielding**: Calls `std::thread::yield_now()` to play nice with OS scheduler.
+    3.  **Deep Idle (Sleep)**: If still idle, the worker sleeps (`100µs`).
+- **SMT Contention Fix**: The "Deep Idle" sleep is critical for SMT processors. By forcing idle threads to sleep, we release execution resources (ALUs, L1 cache) to the sibling thread running on the same physical core, preventing "lazy" threads from slowing down "busy" ones.
+- **Result**: Eliminates performance spikes at high core counts and improving scaling stability.
 
 ### 4.3 Strategy-Aware Scheduling (Hybrid Wakeup)
 Different pinning strategies require different scheduling logic.

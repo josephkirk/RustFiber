@@ -290,7 +290,7 @@ impl JobSystem {
     /// If running in a fiber, this yields execution to other jobs.
     /// If running on a thread (outside fiber), this blocks with a sleep loop.
     pub fn wait_for_counter(&self, counter: &Counter) {
-        use crate::fiber::{Fiber, NODE_STATE_RUNNING, NODE_STATE_WAITING};
+        use crate::fiber::{Fiber};
         use std::sync::atomic::Ordering;
 
         if counter.is_complete() {

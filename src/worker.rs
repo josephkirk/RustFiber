@@ -10,6 +10,7 @@ use crate::fiber_pool::FiberPool;
 use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
+use crossbeam::utils::Backoff;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
@@ -72,6 +73,9 @@ impl Worker {
             ..
         } = params;
 
+        // Init backoff outside the loop so it persists across iterations
+        let backoff = Backoff::new();
+
         loop {
             // Check for shutdown signal
             if shutdown.load(Ordering::Relaxed) {
@@ -85,27 +89,10 @@ impl Worker {
                 continue;
             }
 
-            // Try to get a job: Local -> Global -> Steal
+            // Try to get a job: Local -> Steal -> Global
+            // We optimize for distributed stealing first to avoid global lock contention
             let job = local_queue.pop().or_else(|| {
-                // If local queue is empty, try to steal from the global injector
-                let mut retry_count = 0;
-                const MAX_RETRIES: usize = 3;
-
-                loop {
-                    match injector.steal_batch_and_pop(&local_queue) {
-                        crossbeam::deque::Steal::Success(job) => return Some(job),
-                        crossbeam::deque::Steal::Empty => break,
-                        crossbeam::deque::Steal::Retry => {
-                            retry_count += 1;
-                            if retry_count >= MAX_RETRIES {
-                                std::thread::yield_now();
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Try to steal from other workers
+                // Try to steal from other workers first
                 stealers
                     .iter()
                     .map(|s| s.steal())
@@ -113,12 +100,36 @@ impl Worker {
                         crossbeam::deque::Steal::Success(job) => Some(job),
                         _ => None,
                     })
+                    .or_else(|| {
+                        // If stealing failed, try the global injector
+                        let mut retry_count = 0;
+                        const MAX_RETRIES: usize = 3;
+
+                        loop {
+                            match injector.steal_batch_and_pop(&local_queue) {
+                                crossbeam::deque::Steal::Success(job) => return Some(job),
+                                crossbeam::deque::Steal::Empty => break,
+                                crossbeam::deque::Steal::Retry => {
+                                    retry_count += 1;
+                                    if retry_count >= MAX_RETRIES {
+                                        // For injector contention, we yield immediately
+                                        std::thread::yield_now();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    })
             });
 
             match job {
                 Some(job) => {
                     // Mark as active before running
                     active_workers.fetch_add(1, Ordering::Relaxed);
+
+                    // We found work, so reset the backoff strategy
+                    backoff.reset();
 
                     let (mut fiber, input) = match job.work {
                         crate::job::Work::Resume(handle) => {
@@ -193,8 +204,15 @@ impl Worker {
                     active_workers.fetch_sub(1, Ordering::Relaxed);
                 }
                 None => {
-                    // No work available, brief spin then yield
-                    std::thread::yield_now();
+                    // No work available
+                    if backoff.is_completed() {
+                        // Deep Idle: Release SMT resources completely for a short while
+                        thread::sleep(std::time::Duration::from_micros(100));
+                        backoff.reset();
+                    } else {
+                        // Brief Idle: Spin or yield
+                        backoff.snooze();
+                    }
                 }
             }
         }
@@ -255,7 +273,7 @@ impl WorkerPool {
 
         // Create local queues and stealers for each worker
         for _ in 0..num_threads {
-            let deque = Deque::new_fifo();
+            let deque = Deque::new_lifo();
             stealers.push(deque.stealer());
             local_queues.push(deque);
         }
