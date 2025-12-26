@@ -1,313 +1,84 @@
-# RustFiber - High-Performance Fiber-Based Job System
+# Architecture Guide: High-Performance Fiber Job System
 
-A Rust implementation of a fiber-based job system following the architectural principles from Naughty Dog's engine parallelization work presented at GDC 2015.
+## 1. Executive Summary
 
-## Overview
+This document details the architecture of `RustFiber`, a high-performance job system heavily inspired by **Naughty Dog's GDC 2015 presentation** ("Parallelizing the Naughty Dog Engine Using Fibers"). The system solves the problem of efficiently scheduling thousands of small, granular tasks across a fixed number of CPU cores without the overhead of OS-level context switching.
 
-RustFiber provides a high-performance job system that enables efficient task parallelism using an M:N threading model, where M fibers (lightweight execution contexts) are multiplexed onto N hardware threads.
+By decoupling execution contexts ("fibers") from OS threads, the system allows for:
+- **Zero OS Interference**: Threads are pinned to cores and never block.
+- **Lock-Free Synchronization**: Dependencies are resolved via atomic counters.
+- **High Throughput**: Capable of processing millions of jobs per second.
+- **Low Latency**: User-space context switches take nanoseconds, not microseconds.
 
-## Architecture
+---
 
-The system consists of several key components:
+## 2. Core Concepts
 
-### Core Components
+### 2.1 The Fiber
+A **fiber** is a lightweight, user-space thread of execution with its own stack. Unlike OS threads, fibers are cooperatively scheduled.
+- **Stackful**: Fibers preserve their call stack when yielding. This allows deep call graphs to pause and resume (e.g., inside a nested traversal).
+- **Pooled**: Stacks are expensive to allocate (mmap). Fibers are allocated from a pool and recycled.
+- **Switching**: We use the `corosensei` crate to handle the assembly-level context switching.
 
-1. **JobSystem** - The main entry point for scheduling and managing parallel work
-2. **Context** - Safe interface for jobs to access the job system for nested parallelism
-3. **Worker Pool** - A pool of OS threads that execute jobs
-4. **Job Queue** - Thread-safe queue for pending work units
-5. **Counters** - Synchronization primitives for tracking job completion
-6. **Fibers** - Lightweight execution contexts for jobs
+### 2.2 The Job
+A **job** is the smallest unit of work, defined as a `FnOnce`.
+- **Granularity**: Jobs should be small but not trivial.
+- **Lifetime**: Jobs are transient. They run, complete, and modify the dependency graph.
 
-### Design Principles
+### 2.3 The Atomic Counter
+The universal synchronization primitive.
+- **Dependency Tracking**: Jobs wait on counters, not other jobs. This creates a flexible DAG.
+- **Wait Lists**: When a fiber waits on a counter, it adds itself to the counter's intrusive wait list and yields. When the counter reaches zero, the waiting list is flushed, and the fibers are rescheduled.
 
-- **Work-Stealing Model**: Efficient job distribution using local queues, a global injector, and crossbeam-deque
-- **Thread Pinning Strategies**: Optimized core mapping for x86 and Ryzen architectures
-- **Tiered Spillover System**: Dynamic core activation based on system load
-- **Counter-Based Synchronization**: Efficient tracking of job completion without blocking
-- **Lock-Free Communication**: Using crossbeam-deque for minimal contention
-- **Zero-Cost Abstractions**: Leveraging Rust's type system for safety without overhead
+---
 
-## Features
+## 3. System Architecture
 
-- ✅ **Parallel Job Execution**: Schedule work across multiple CPU cores
-- ✅ **Nested Parallelism**: Jobs can spawn child jobs using Context for recursive work decomposition
-- ✅ **Work-Stealing Scheduler**: Dynamic load balancing between worker threads
-- ✅ **Advanced Pinning**: Strategies like `AvoidSMT`, `CCDIsolation`, and `TieredSpillover`
-- ✅ **Counter-Based Waiting**: Wait for job completion without busy-waiting
-- ✅ **Thread-Safe**: Built on Rust's ownership model and crossbeam primitives
-- ✅ **High Throughput**: Capable of millions of jobs per second
-- ✅ **Simple API**: Easy to use interface for job submission and synchronization
+### 3.1 Worker Threads & Pinning
+The system spawns `N` worker threads (where `N` = logical cores).
+- **Pinning**: Threads are pinned to specific cores to maximize L1/L2 cache locality.
+- **Strategies**:
+    - `Linear`: 1:1 mapping (Best for uniform workloads).
+    - `TieredSpillover`: Dynamic expansion. Uses physical cores first, spills to SMT/Hyperthreads only under load.
+    - `AvoidSMT`: Strictly physical cores.
 
-## Thread Pinning Strategies
+### 3.2 Scheduling: Work Stealing
+We use a **Chase-Lev Work-Stealing Deque** (via `crossbeam-deque`).
+- **Local Queue**: Workers push/pop to their own LIFO queue (Hot cache optimization).
+- **Stealing**: If a worker runs out of work, it attempts to steal from the *top* (FIFO) of other workers' queues.
+- **Global Injector**: Handles entry-point jobs from external threads.
 
-The system supports several strategies to optimize performance for different hardware:
+---
 
-- **None**: Default OS scheduling.
-- **Linear**: Simple 1:1 mapping of workers to logical processors.
-- **AvoidSMT**: Pins only to physical cores, avoiding hyperthreading contention.
-- **CCDIsolation**: Pins to physical cores on the first CCD only (Ryzen optimization).
-- **TieredSpillover**: A dynamic system that activates physical cores first (Tier 1), then spills over to secondary CCDs (Tier 2), and finally SMT threads (Tier 3) only when load thresholds (80% utilization) are exceeded.
+## 4. Implementation Details & Optimizations (v0.2)
 
-## Installation
+### 4.1 Stack Reuse & Memory Efficiency
+Allocating new stacks for every fiber is prohibitive (`mmap` syscalls).
+- **Solution**: We implemented `DefaultStack` reuse in `FiberPool`.
+- **Mechanism**: When a fiber completes, its stack is reset (rewind stack pointer) rather than deallocated. This reduced fiber allocation cost to near-zero.
+- **Impact**: Removing allocation overhead was critical to achieving >6M jobs/sec.
 
-Add this to your `Cargo.toml`:
+### 4.2 Adaptive Spinning
+Context switching, even in user space, has overhead (~50ns + cache pollution).
+- **Problem**: Yielding immediately for a very short dependency (nanoseconds) is inefficient.
+- **Solution**: `wait_for_counter` implements **Adaptive Spinning**. It spins for a calibrated number of cycles (`SPIN_LIMIT = 2000`) before yielding.
+- **Result**: Drastically reduced latency for fine-grained dependency chains.
 
-```toml
-[dependencies]
-rustfiber = "0.1.0"
-```
+### 4.3 Strategy-Aware Scheduling (Hybrid Wakeup)
+Different pinning strategies require different scheduling logic.
+- **Problem**: A naive "Local Wakeup" (pushing woke fibers to local queue) works great for `Linear` (affinity) but breaks `TieredSpillover` (dormant threads never see the work).
+- **Solution**: The `Worker` now dynamically selects the scheduler based on the active `PinningStrategy`.
+    - **Linear / AvoidSMT**: Uses **Local Queue** for rescheduled fibers. Preserves CPU affinity.
+    - **TieredSpillover**: Uses **Global Injector** for rescheduled fibers. Ensures dormant threads (Tier 2/3) can pick up spillover work.
 
-## Usage
+---
 
-### Basic Example
+## 5. Performance
 
-```rust
-use rustfiber::JobSystem;
+Our benchmarks demonstrate the effectiveness of this architecture:
 
-// Create a job system with 4 worker threads
-let job_system = JobSystem::new(4);
-
-// Submit a simple job
-let counter = job_system.run(|| {
-    println!("Hello from a job!");
-});
+- **Fibonacci (Tiny Tasks)**: >3.5 Million tasks/sec.
+- **Conjugate Gradient (Memory Bound)**: <1.5ms execution time for 100k elements (Linear Strategy).
+- **QuickSort (Recursive)**: Linear scaling with core count.
 
-// Wait for completion
-job_system.wait_for_counter(&counter);
-
-// Clean shutdown
-job_system.shutdown();
-```
-
-### Parallel Computation
-
-```rust
-use rustfiber::JobSystem;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
-let job_system = JobSystem::new(4);
-let sum = Arc::new(AtomicUsize::new(0));
-
-// Submit multiple jobs
-let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-for i in 0..100 {
-    let sum_clone = sum.clone();
-    jobs.push(Box::new(move || {
-        sum_clone.fetch_add(i, Ordering::SeqCst);
-    }));
-}
-
-let counter = job_system.run_multiple(jobs);
-job_system.wait_for_counter(&counter);
-
-println!("Sum: {}", sum.load(Ordering::SeqCst));
-job_system.shutdown();
-```
-
-### Using Counters Directly
-
-```rust
-use rustfiber::{JobSystem, Counter};
-
-let job_system = JobSystem::new(4);
-let counter = Counter::new(10);
-
-// Submit 10 jobs that share a counter
-for _ in 0..10 {
-    let counter_clone = counter.clone();
-    job_system.run(move || {
-        // Do work...
-        counter_clone.decrement();
-    });
-}
-
-// Wait for all jobs to complete
-job_system.wait_for_counter(&counter);
-```
-
-### Nested Parallelism with Context
-
-The Context type enables safe nested parallelism, allowing jobs to spawn child jobs:
-
-```rust
-use rustfiber::JobSystem;
-
-let job_system = JobSystem::new(4);
-
-// Parent job spawns child jobs
-let counter = job_system.run_with_context(|ctx| {
-    // Subdivide work into parallel chunks
-    let mut counters = vec![];
-    
-    for chunk_id in 0..4 {
-        let child = ctx.spawn_job(move |ctx| {
-            // Child can spawn its own children
-            let grandchild = ctx.spawn_job(move |_| {
-                println!("Grandchild of chunk {} running", chunk_id);
-            });
-            ctx.wait_for(&grandchild);
-        });
-        counters.push(child);
-    }
-    
-    // Wait for all children
-    for c in counters {
-        ctx.wait_for(&c);
-    }
-});
-
-job_system.wait_for_counter(&counter);
-job_system.shutdown();
-```
-
-This pattern is useful for:
-- Recursive algorithms (quicksort, parallel reduce)
-- Hierarchical decomposition (particle systems, physics simulation)
-- Fork-join parallelism
-- Producer-consumer patterns
-
-## Performance
-
-On a typical multi-core system, RustFiber achieves:
-- **6+ million jobs/second** throughput
-- **Sub-microsecond** latency for simple jobs
-- **Efficient CPU utilization** across all cores
-
-## Building
-
-```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run example
-cargo run --release
-```
-
-## Testing
-
-The project includes comprehensive tests:
-
-```bash
-cargo test
-```
-
-Tests cover:
-- Counter synchronization
-- Job execution
-- Parallel job scheduling
-- Worker pool management
-- High-throughput scenarios
-
-## Implementation Details
-
-### Thread Safety
-
-The system uses:
-- `Arc` for shared ownership
-- `AtomicUsize` for counter operations and active worker tracking
-- `crossbeam::deque` for lock-free work-stealing queues
-- Rust's `Send` and `Sync` traits for compile-time safety
-
-### Scheduling
-
-RustFiber uses a sophisticated **Work-Stealing** scheduler:
-1. **Local Queue**: Each worker has a local FIFO queue for minimal contention.
-2. **Global Injector**: Jobs submitted from outside the systems are deposited here.
-3. **Stealing Logic**: Idle workers first check their local queue, then the global injector, and finally attempt to "steal" work from other workers' queues to ensure balanced load.
-
-### Memory Management
-
-- Jobs are heap-allocated boxed closures
-- Counters use atomic reference counting
-- Worker threads own their receiver endpoints
-
-### Context and Nested Parallelism
-
-The Context type provides safe access to the job system from within jobs:
-
-**Design**: Context holds a reference to the JobSystem with lifetime checking. When a job is created with `run_with_context`, the JobSystem pointer is stored as a `usize` (to make it `Send`) and converted back safely when the job executes.
-
-**Safety Guarantees**:
-- The JobSystem is guaranteed to outlive all jobs it creates
-- Jobs are fully executed before `JobSystem::shutdown()` completes
-- Context lifetime is bounded by job execution scope
-- No unsafe pointer dereferencing outside controlled execution paths
-
-**API**:
-- `ctx.spawn_job(|ctx| ...)` - Spawn a single child job
-- `ctx.spawn_jobs(vec![...])` - Spawn multiple child jobs
-- `ctx.wait_for(&counter)` - Wait for child jobs to complete
-- `ctx.yield_now()` - Cooperatively yield execution (thread-level for now)
-
-This enables patterns like:
-- Recursive parallel algorithms
-- Hierarchical work decomposition
-- Fork-join parallelism
-- Cooperative yielding in long-running tasks
-
-## Future Enhancements
-
-Potential improvements for production use:
-
-1. **True Fiber Context Switching**: Implement stackful fibers with context switching
-2. **Priority Queues**: Support job priorities
-3. **Fiber Yielding**: Enhance cooperative yielding beyond thread-level to true fiber suspension
-4. **Instrumentation**: Add profiling and performance metrics
-5. **Async Integration**: Bridge with Rust's async/await
-
-## Solved Problems
-
-### Context Type for Nested Parallelism (✅ Implemented)
-
-Previously, applications like Arcel needed unsafe workarounds to access the JobSystem from within jobs:
-
-```rust
-// OLD: Unsafe workaround (no longer needed)
-let job_system_ptr_addr = &self.job_system as *const JobSystem as usize;
-jobs.push(Box::new(move || unsafe {
-   let js_ptr = job_system_ptr_addr as *const JobSystem;
-   (*js_ptr).run(...);  // Unsafe pointer dereference
-}));
-```
-
-The Context type provides a safe, ergonomic alternative:
-
-```rust
-// NEW: Safe with Context
-let counter = job_system.run_with_context(|ctx| {
-    let child = ctx.spawn_job(|_| {
-        // Child work
-    });
-    ctx.wait_for(&child);
-});
-```
-
-**Benefits**:
-- ✅ Type-safe: Lifetime-checked references instead of raw pointers
-- ✅ Ergonomic: Clean, composable API
-- ✅ Maintainable: No unsafe code required by users
-- ✅ Future-proof: Foundation for advanced features like fiber yielding
-
-## References
-
-This implementation is inspired by:
-
-- Christian Gyrling's GDC 2015 talk: "Parallelizing the Naughty Dog Engine Using Fibers"
-- Various fiber job system implementations in the game industry
-- Rust's async runtime architectures (Tokio, async-std)
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
+See [BENCHMARKS.md](BENCHMARKS.md) for detailed graphs and results.

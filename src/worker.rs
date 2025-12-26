@@ -32,6 +32,7 @@ pub(crate) struct WorkerParams {
     pub(crate) tier: u32,
     pub(crate) threshold: usize,
     pub(crate) core_id: Option<CoreId>,
+    pub(crate) strategy: PinningStrategy,
 }
 
 impl Worker {
@@ -67,6 +68,7 @@ impl Worker {
             fiber_pool,
             tier,
             threshold,
+            strategy,
             ..
         } = params;
 
@@ -133,8 +135,11 @@ impl Worker {
                             // Reconstruct job (we moved work out)
                             let job = Job { work, counter: job.counter }; 
                             
-                            // Use local queue as scheduler for immediate wakeup locality
-                            let scheduler: &dyn crate::counter::JobScheduler = &local_queue;
+                            // Use local queue as scheduler for immediate wakeup locality if strategy permits
+                            let scheduler: &dyn crate::counter::JobScheduler = match strategy {
+                                crate::PinningStrategy::TieredSpillover => &*injector,
+                                _ => &local_queue,
+                            };
                             let scheduler_ptr = scheduler as *const dyn crate::counter::JobScheduler;
                             
                             let fiber_ptr = fiber.as_mut() as *mut crate::fiber::Fiber;
@@ -152,11 +157,23 @@ impl Worker {
                         FiberState::Yielded(reason) => {
                             let raw_fiber = Box::into_raw(fiber);
                             if let crate::fiber::YieldType::Normal = reason {
-                                // Reschedule the fiber immediately to LOCAL queue
-                                // SAFETY: The local_queue reference is valid
+                                // Reschedule dependent on strategy
                                 let handle = crate::fiber::FiberHandle(raw_fiber);
                                 let job = Job::resume_job(handle);
-                                local_queue.push(job);
+                                
+                                match strategy {
+                                     crate::PinningStrategy::TieredSpillover => {
+                                         // Push to global injector to wake up dormant threads
+                                         unsafe {
+                                             let injector_ptr = &*injector as *const Injector<Job>;
+                                             (*injector_ptr).push(job);
+                                         }
+                                     }
+                                     _ => {
+                                         // Keep local for other strategies
+                                         local_queue.push(job);
+                                     }
+                                }
                             }
                         }
                         FiberState::Panic(err) => {
@@ -321,6 +338,7 @@ impl WorkerPool {
                 fiber_pool: Arc::clone(&fiber_pool),
                 tier: tiers[id],
                 threshold: thresholds[id],
+                strategy,
             }));
         }
 
