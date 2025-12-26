@@ -204,8 +204,15 @@ impl Worker {
                     active_workers.fetch_sub(1, Ordering::Relaxed);
                 }
                 None => {
-                    // No work available, use backoff to spin then yield
-                    backoff.snooze();
+                    // No work available
+                    if backoff.is_completed() {
+                        // Deep Idle: Release SMT resources completely for a short while
+                        thread::sleep(std::time::Duration::from_micros(100));
+                        backoff.reset();
+                    } else {
+                        // Brief Idle: Spin or yield
+                        backoff.snooze();
+                    }
                 }
             }
         }
