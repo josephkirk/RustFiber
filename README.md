@@ -14,8 +14,14 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Nested Parallelism**: Jobs can spawn child jobs using Context for recursive decomposition
 - **Counter-Based Synchronization**: Track job completion without blocking
 - **Thread-Safe**: Built on Rust's ownership model and proven concurrency primitives
-- **High Throughput**: Capable of processing millions of jobs per second
-- **Simple API**: Easy-to-use interface for job submission and synchronization
+- ✅ **High Throughput**: Capable of millions of jobs per second
+- ✅ **Simple API**: Easy to use interface for job submission and synchronization
+
+## v0.2 Optimizations (New)
+
+- **Stack Reuse**: Eliminated `mmap` overhead by recycling fiber stacks.
+- **Adaptive Spinning**: Reduced latency for fine-grained dependency chains.
+- **Strategy-Aware Scheduling**: Hybrid Local/Global scheduling to optimize for both cache affinity (`Linear`) and load balancing (`TieredSpillover`).
 
 ## Quick Start
 

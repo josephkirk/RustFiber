@@ -258,6 +258,12 @@ impl JobSystem {
         counter
     }
 
+    /// Submits a raw Job object to the global injector.
+    /// Used for rescheduling yielded fibers.
+    pub fn submit_to_injector(&self, job: Job) {
+        self.worker_pool.submit(job);
+    }
+
     /// Waits for a counter to reach zero (all tracked jobs completed).
     ///
     /// Note: This uses a simple polling approach with sleep. In a production
@@ -279,15 +285,96 @@ impl JobSystem {
     /// });
     /// job_system.wait_for_counter(&counter);
     /// ```
+    /// Waits for a counter to reach zero (all tracked jobs completed).
+    ///
+    /// If running in a fiber, this yields execution to other jobs.
+    /// If running on a thread (outside fiber), this blocks with a sleep loop.
     pub fn wait_for_counter(&self, counter: &Counter) {
-        // Use a backoff strategy to reduce CPU usage
-        let mut backoff_us = 1;
-        const MAX_BACKOFF_US: u64 = 1000; // Max 1ms backoff
+        use crate::fiber::{Fiber, NODE_STATE_RUNNING, NODE_STATE_WAITING};
+        use std::sync::atomic::Ordering;
 
-        while !counter.is_complete() {
-            thread::sleep(Duration::from_micros(backoff_us));
-            // Exponential backoff up to max
-            backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
+        if counter.is_complete() {
+            return;
+        }
+
+        if let Some(fiber_handle) = Fiber::current() {
+            // Fiber path: Intrusive wait
+            unsafe {
+                let fiber = &*fiber_handle.0;
+                let node_ptr = fiber.wait_node.get();
+                let node_ref = &mut *node_ptr;
+
+                // Adaptive spinning phase (before adding to wait list)
+                // This is safe because we are not yet in the wait list, so no "Double Resume" is possible.
+                // We double-check is_complete() after registering to avoid "Missed Wakeup".
+                const SPIN_LIMIT: usize = 5000;
+                let mut spin_count = 0;
+
+                while !counter.is_complete() {
+                    if spin_count < SPIN_LIMIT {
+                        std::hint::spin_loop();
+                        spin_count += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if counter.is_complete() {
+                    return;
+                }
+
+                loop {
+                    // Check completion first
+                    if counter.is_complete() {
+                        return;
+                    }
+
+                    // Initialize node for waiting
+                    node_ref.fiber_handle = fiber_handle;
+                    node_ref
+                        .state
+                        .store(crate::fiber::NODE_STATE_WAITING, Ordering::Relaxed);
+
+                    // Add to counter's wait list
+                    counter.add_waiter(node_ptr);
+
+                    // Double check to avoid race condition (Missed Wakeup)
+                    if counter.is_complete() {
+                        // Try to transition back to RUNNING
+                        if node_ref
+                            .state
+                            .compare_exchange(
+                                crate::fiber::NODE_STATE_WAITING,
+                                crate::fiber::NODE_STATE_RUNNING,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            )
+                            .is_ok()
+                        {
+                            // Successfully aborted.
+                            return;
+                        }
+                        // If failed, we were SIGNALED. Fall through to yield.
+                    }
+
+                    // Yield execution. We will be resumed when the counter signals us.
+                    Fiber::yield_now(crate::fiber::YieldType::Wait);
+
+                    // On resume, reset state.
+                    node_ref
+                        .state
+                        .store(crate::fiber::NODE_STATE_RUNNING, Ordering::Relaxed);
+                }
+            }
+        } else {
+            // Thread path: Blocking wait
+            let mut backoff_us = 1;
+            const MAX_BACKOFF_US: u64 = 1000;
+
+            while !counter.is_complete() {
+                thread::sleep(Duration::from_micros(backoff_us));
+                backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
+            }
         }
     }
 

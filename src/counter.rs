@@ -1,43 +1,155 @@
 //! Counter-based synchronization primitives for job completion tracking.
-//!
-//! Counters are the primary synchronization mechanism in the fiber job system.
-//! They track the number of incomplete jobs and allow fibers to efficiently
-//! wait for job completion without blocking worker threads.
 
+use crate::fiber::{NODE_STATE_SIGNALED, NODE_STATE_SPINNING, NODE_STATE_WAITING, WaitNode};
+use crate::job::Job;
+use crossbeam::deque::{Injector, Worker};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+
+pub trait JobScheduler {
+    fn schedule(&self, job: Job);
+}
+
+impl JobScheduler for Injector<Job> {
+    fn schedule(&self, job: Job) {
+        self.push(job);
+    }
+}
+
+impl JobScheduler for Worker<Job> {
+    fn schedule(&self, job: Job) {
+        self.push(job);
+    }
+}
+
+struct InnerCounter {
+    value: AtomicUsize,
+    wait_list: AtomicPtr<WaitNode>,
+}
 
 /// A thread-safe counter for tracking job completion.
-///
-/// Counters start at a specified value and decrement as jobs complete.
-/// Fibers can wait on a counter to reach zero, indicating all tracked
-/// jobs have finished.
 #[derive(Clone)]
 pub struct Counter {
-    inner: Arc<AtomicUsize>,
+    inner: Arc<InnerCounter>,
 }
 
 impl Counter {
     /// Creates a new counter with the specified initial value.
     pub fn new(initial: usize) -> Self {
         Counter {
-            inner: Arc::new(AtomicUsize::new(initial)),
+            inner: Arc::new(InnerCounter {
+                value: AtomicUsize::new(initial),
+                wait_list: AtomicPtr::new(std::ptr::null_mut()),
+            }),
         }
     }
 
     /// Increments the counter by one.
     pub fn increment(&self) {
-        self.inner.fetch_add(1, Ordering::SeqCst);
+        self.inner.value.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Decrements the counter by one.
-    pub fn decrement(&self) {
-        self.inner.fetch_sub(1, Ordering::SeqCst);
+    /// Decrements the counter by one and wakes waiting fibers if zero.
+    ///
+    /// Returns true if the counter reached zero.
+    /// Decrements the counter by one and wakes waiting fibers if zero.
+    ///
+    /// Returns true if the counter reached zero.
+    pub fn decrement<S: JobScheduler + ?Sized>(&self, scheduler: &S) -> bool {
+        // Use Release ordering so that all prior work is visible to woken fibers
+        let old_val = self.inner.value.fetch_sub(1, Ordering::Release);
+        if old_val == 1 {
+            // Counter reached zero. Wake all waiters.
+            // Acquire ensures we see the node linking done by waiters.
+            let mut head = self
+                .inner
+                .wait_list
+                .swap(std::ptr::null_mut(), Ordering::Acquire);
+
+            // Batch wake
+            while !head.is_null() {
+                unsafe {
+                    let node = &*head;
+                    let next_node = node.next.load(Ordering::Relaxed);
+
+                    // Recover the fiber handle and schedule it
+                    if !node.fiber_handle.is_null() {
+                        // Optimistic check to avoid expensive CAS loop
+                        let mut current_state = node.state.load(Ordering::Relaxed);
+
+                        loop {
+                            if current_state == NODE_STATE_WAITING {
+                                match node.state.compare_exchange_weak(
+                                    NODE_STATE_WAITING,
+                                    NODE_STATE_SIGNALED,
+                                    Ordering::AcqRel,
+                                    Ordering::Relaxed,
+                                ) {
+                                    Ok(_) => {
+                                        // Successfully transitioned to signaled. Push to injector.
+                                        let job = Job::resume_job(node.fiber_handle);
+                                        scheduler.schedule(job);
+                                        break;
+                                    }
+                                    Err(actual) => current_state = actual,
+                                }
+                            } else if current_state == NODE_STATE_SPINNING {
+                                match node.state.compare_exchange_weak(
+                                    NODE_STATE_SPINNING,
+                                    NODE_STATE_SIGNALED,
+                                    Ordering::AcqRel,
+                                    Ordering::Relaxed,
+                                ) {
+                                    Ok(_) => {
+                                        // Spinner will wake itself up. Do NOT enqueue.
+                                        break;
+                                    }
+                                    Err(actual) => current_state = actual,
+                                }
+                            } else {
+                                // Already RUNNING or SIGNALED.
+                                break;
+                            }
+                        }
+                    }
+
+                    head = next_node;
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Adds a waiter to the intrusive list.
+    ///
+    /// # Safety
+    /// The `wait_node` must be pinned/stable in memory.
+    pub unsafe fn add_waiter(&self, wait_node: *mut WaitNode) {
+        unsafe {
+            let mut current_head = self.inner.wait_list.load(Ordering::Relaxed);
+            loop {
+                // Link node -> current_head
+                (*wait_node).next.store(current_head, Ordering::Relaxed);
+
+                // CAS head -> node
+                match self.inner.wait_list.compare_exchange_weak(
+                    current_head,
+                    wait_node,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(new_head) => current_head = new_head,
+                }
+            }
+        }
     }
 
     /// Returns the current value of the counter.
     pub fn value(&self) -> usize {
-        self.inner.load(Ordering::SeqCst)
+        self.inner.value.load(Ordering::SeqCst)
     }
 
     /// Checks if the counter has reached zero.
@@ -45,15 +157,9 @@ impl Counter {
         self.value() == 0
     }
 
-    /// Resets the counter to the specified value.
+    // Test helper
     pub fn reset(&self, value: usize) {
-        self.inner.store(value, Ordering::SeqCst);
-    }
-}
-
-impl Default for Counter {
-    fn default() -> Self {
-        Counter::new(0)
+        self.inner.value.store(value, Ordering::SeqCst);
     }
 }
 
@@ -67,7 +173,8 @@ mod tests {
         assert_eq!(counter.value(), 5);
         assert!(!counter.is_complete());
 
-        counter.decrement();
+        let injector = Injector::new();
+        counter.decrement(&injector);
         assert_eq!(counter.value(), 4);
 
         counter.increment();
@@ -79,7 +186,8 @@ mod tests {
         let counter = Counter::new(1);
         assert!(!counter.is_complete());
 
-        counter.decrement();
+        let injector = Injector::new();
+        counter.decrement(&injector);
         assert!(counter.is_complete());
     }
 

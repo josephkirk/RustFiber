@@ -53,7 +53,9 @@ fn test_counter_synchronization() {
         let counter_clone = counter.clone();
         job_system.run(move || {
             thread::sleep(Duration::from_millis(10));
-            counter_clone.decrement();
+            // Use dummy injector for testing (no waiters expected)
+            let injector = crossbeam::deque::Injector::<crate::job::Job>::new();
+            counter_clone.decrement(&injector);
         });
     }
 
