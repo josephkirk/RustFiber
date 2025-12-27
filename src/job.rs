@@ -89,6 +89,15 @@ impl Job {
 
     /// Executes the job and decrements its counter if present.
     pub fn execute(self, scheduler: &dyn crate::counter::JobScheduler) {
+        use crate::counter::CounterGuard;
+
+        // Create the RAII guard for the counter if one exists.
+        // This ensures the counter is decremented even if the job panics.
+        let _guard = self
+            .counter
+            .as_ref()
+            .map(|c| CounterGuard::new(c, scheduler));
+
         match self.work {
             Work::Simple(work) => work(),
             Work::WithContext {
@@ -113,9 +122,7 @@ impl Job {
             }
         }
 
-        if let Some(counter) = self.counter {
-            counter.decrement(scheduler);
-        }
+        // _guard is dropped here, triggering decrement
     }
 }
 
