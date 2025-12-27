@@ -95,7 +95,7 @@ pub struct Fiber {
     /// Valid only when the fiber is running.
     yielder: *const Yielder<FiberInput, YieldType>,
 
-    /// Flag to prevent double-resume hazards. 
+    /// Flag to prevent double-resume hazards.
     /// Set to true when suspended, false when running.
     pub is_suspended: std::sync::atomic::AtomicBool,
 }

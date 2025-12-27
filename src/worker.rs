@@ -149,13 +149,13 @@ impl Worker {
 
                             // We are now the owner. Mark as running.
                             fiber.is_suspended.store(false, Ordering::Relaxed);
-                            
+
                             (fiber, FiberInput::Resume)
                         }
                         work => {
                             // New job - acquire fiber from pool
                             let mut fiber = fiber_pool.get();
-                            
+
                             // Initialize suspension state for new run
                             fiber.is_suspended.store(false, Ordering::Relaxed);
 
@@ -164,7 +164,7 @@ impl Worker {
                                 work,
                                 counter: job.counter,
                             };
-                            
+
                             // Use local queue as scheduler for immediate wakeup locality if strategy permits
                             let scheduler: &dyn crate::counter::JobScheduler = match strategy {
                                 crate::PinningStrategy::TieredSpillover => &*injector,
