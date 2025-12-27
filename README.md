@@ -12,6 +12,7 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Nested Parallelism**: Jobs can spawn child jobs using Context for recursive decomposition
 - **Counter-Based Synchronization**: Track job completion without blocking
 - **Thread-Safe**: Built on Rust's ownership model and proven concurrency primitives
+- **Job Prioritization**: Schedule critical tasks with `High`, `Normal`, or `Low` priority
 - ✅ **High Throughput**: Capable of millions of jobs per second
 - ✅ **Simple API**: Easy to use interface for job submission and synchronization
 

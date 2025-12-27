@@ -8,6 +8,18 @@ use crate::counter::Counter;
 
 use crate::fiber::FiberHandle;
 
+/// Priority level for job execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum JobPriority {
+    /// Low priority - background tasks
+    Low,
+    /// Normal priority - standard game logic
+    #[default]
+    Normal,
+    /// High priority - critical path (physics, reliable networking)
+    High,
+}
+
 /// Internal representation of work to be executed.
 pub enum Work {
     /// Simple closure without context
@@ -30,6 +42,8 @@ pub struct Job {
     pub work: Work,
     /// Optional counter to decrement when the job completes
     pub(crate) counter: Option<Counter>,
+    /// Execution priority
+    pub priority: JobPriority,
 }
 
 impl Job {
@@ -41,6 +55,7 @@ impl Job {
         Job {
             work: Work::Simple(Box::new(work)),
             counter: None,
+            priority: JobPriority::Normal,
         }
     }
 
@@ -49,6 +64,7 @@ impl Job {
         Job {
             work: Work::Resume(handle),
             counter: None,
+            priority: JobPriority::High, // Resumed fibers usually should continue ASAP
         }
     }
 
@@ -60,6 +76,7 @@ impl Job {
         Job {
             work: Work::Simple(Box::new(work)),
             counter: Some(counter),
+            priority: JobPriority::Normal,
         }
     }
 
@@ -84,7 +101,14 @@ impl Job {
                 job_system_ptr,
             },
             counter: Some(counter),
+            priority: JobPriority::Normal,
         }
+    }
+
+    /// Sets the priority of the job.
+    pub fn with_priority(mut self, priority: JobPriority) -> Self {
+        self.priority = priority;
+        self
     }
 
     /// Executes the job and decrements its counter if present.

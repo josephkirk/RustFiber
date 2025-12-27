@@ -27,6 +27,7 @@ pub(crate) struct WorkerParams {
     pub(crate) local_queue: Deque<Job>,
     pub(crate) stealers: Arc<Vec<Stealer<Job>>>,
     pub(crate) injector: Arc<Injector<Job>>,
+    pub(crate) high_priority_injector: Arc<Injector<Job>>,
     pub(crate) shutdown: Arc<AtomicBool>,
     pub(crate) active_workers: Arc<AtomicUsize>,
     pub(crate) fiber_pool: Arc<FiberPool>,
@@ -64,6 +65,7 @@ impl Worker {
             local_queue,
             stealers,
             injector,
+            high_priority_injector,
             shutdown,
             active_workers,
             fiber_pool,
@@ -89,9 +91,17 @@ impl Worker {
                 continue;
             }
 
-            // Try to get a job: Local -> Steal -> Global
-            // We optimize for distributed stealing first to avoid global lock contention
-            let job = local_queue.pop().or_else(|| {
+            // Try to get a job: High Priority -> Local -> Steal -> Global
+            // We check high priority global queue first
+            let job = loop {
+                match high_priority_injector.steal() {
+                    crossbeam::deque::Steal::Success(job) => break Some(job),
+                    crossbeam::deque::Steal::Retry => continue,
+                    crossbeam::deque::Steal::Empty => break None,
+                }
+            }
+            .or_else(|| local_queue.pop())
+            .or_else(|| {
                 // Try to steal from other workers first
                 stealers
                     .iter()
@@ -131,7 +141,13 @@ impl Worker {
                     // We found work, so reset the backoff strategy
                     backoff.reset();
 
-                    let (mut fiber, input) = match job.work {
+                    let Job {
+                        work,
+                        counter,
+                        priority,
+                    } = job;
+
+                    let (mut fiber, input) = match work {
                         crate::job::Work::Resume(handle) => {
                             // Resume suspended fiber
                             // SAFETY: The handle comes from a Box<Fiber> that was leaked into raw pointer
@@ -162,7 +178,8 @@ impl Worker {
                             // Reconstruct job (we moved work out)
                             let job = Job {
                                 work,
-                                counter: job.counter,
+                                counter,
+                                priority,
                             };
 
                             // Use local queue as scheduler for immediate wakeup locality if strategy permits
@@ -200,7 +217,11 @@ impl Worker {
                                 match strategy {
                                     crate::PinningStrategy::TieredSpillover => {
                                         // Push to global injector to wake up dormant threads
-                                        injector.push(job);
+                                        if job.priority == crate::job::JobPriority::High {
+                                            high_priority_injector.push(job);
+                                        } else {
+                                            injector.push(job);
+                                        }
                                     }
                                     _ => {
                                         // Keep local for other strategies
@@ -261,6 +282,7 @@ impl Worker {
 pub struct WorkerPool {
     workers: Vec<Worker>,
     injector: Arc<Injector<Job>>,
+    high_priority_injector: Arc<Injector<Job>>,
     shutdown: Arc<AtomicBool>,
     active_workers: Arc<AtomicUsize>,
     _fiber_pool: Arc<FiberPool>,
@@ -268,12 +290,16 @@ pub struct WorkerPool {
 
 impl WorkerPool {
     /// Creates a new worker pool with work-stealing queues.
-    pub fn new(num_threads: usize) -> Self {
-        Self::new_with_strategy(num_threads, PinningStrategy::None)
+    pub fn new(num_threads: usize, config: crate::job_system::FiberConfig) -> Self {
+        Self::new_with_strategy(num_threads, PinningStrategy::None, config)
     }
 
     /// Creates a new worker pool with optional CPU affinity pinning.
-    pub fn new_with_affinity(num_threads: usize, pin_to_core: bool) -> Self {
+    pub fn new_with_affinity(
+        num_threads: usize,
+        pin_to_core: bool,
+        config: crate::job_system::FiberConfig,
+    ) -> Self {
         Self::new_with_strategy(
             num_threads,
             if pin_to_core {
@@ -281,16 +307,25 @@ impl WorkerPool {
             } else {
                 PinningStrategy::None
             },
+            config,
         )
     }
 
     /// Creates a new worker pool with a specific pinning strategy.
-    pub fn new_with_strategy(num_threads: usize, strategy: PinningStrategy) -> Self {
+    pub fn new_with_strategy(
+        num_threads: usize,
+        strategy: PinningStrategy,
+        config: crate::job_system::FiberConfig,
+    ) -> Self {
         let injector = Arc::new(Injector::new());
+        let high_priority_injector = Arc::new(Injector::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let active_workers = Arc::new(AtomicUsize::new(0));
-        // Default stack size 512KB, pool size 128 per thread.
-        let fiber_pool = Arc::new(FiberPool::new(num_threads * 128, 512 * 1024));
+
+        let fiber_pool = Arc::new(FiberPool::new(
+            config.initial_pool_size * num_threads,
+            config.stack_size,
+        ));
 
         let mut local_queues = Vec::with_capacity(num_threads);
         let mut stealers = Vec::with_capacity(num_threads);
@@ -375,6 +410,7 @@ impl WorkerPool {
                 local_queue,
                 stealers: Arc::clone(&stealers),
                 injector: Arc::clone(&injector),
+                high_priority_injector: Arc::clone(&high_priority_injector),
                 shutdown: Arc::clone(&shutdown),
                 core_id,
                 active_workers: Arc::clone(&active_workers),
@@ -388,21 +424,27 @@ impl WorkerPool {
         WorkerPool {
             workers,
             injector,
+            high_priority_injector,
             shutdown,
             active_workers,
             _fiber_pool: fiber_pool,
         }
     }
 
-    /// Submits a single job to the global injector.
+    /// Submits a single job to the scheduling system.
     pub fn submit(&self, job: Job) {
-        self.injector.push(job);
+        if job.priority == crate::job::JobPriority::High {
+            self.high_priority_injector.push(job);
+        } else {
+            self.injector.push(job);
+        }
     }
 
     /// Submits multiple jobs in a batch to reduce contention.
     pub fn submit_batch(&self, jobs: Vec<Job>) {
+        // We could optimize this by splitting batch, but for now simple iteration is fine
         for job in jobs {
-            self.injector.push(job);
+            self.submit(job);
         }
     }
 

@@ -1,5 +1,6 @@
 use rustfiber::counter::Counter;
 use rustfiber::job::Job;
+use rustfiber::job_system::FiberConfig;
 use rustfiber::worker::WorkerPool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,7 +8,7 @@ use std::time::Duration;
 
 #[test]
 fn test_panic_safety_counter_decrement() {
-    let pool = WorkerPool::new(1);
+    let pool = WorkerPool::new(1, FiberConfig::default());
     let counter = Counter::new(1);
 
     // Create a job that panics
@@ -32,7 +33,7 @@ fn test_panic_safety_counter_decrement() {
 
 #[test]
 fn test_worker_recovery_after_panic() {
-    let pool = WorkerPool::new(1);
+    let pool = WorkerPool::new(1, FiberConfig::default());
     let counter = Counter::new(1);
 
     // 1. Submit panicking job

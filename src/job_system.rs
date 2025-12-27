@@ -10,6 +10,24 @@ use crate::worker::WorkerPool;
 use std::thread;
 use std::time::Duration;
 
+/// Configuration for the fiber system.
+#[derive(Clone, Debug)]
+pub struct FiberConfig {
+    /// Stack size for each fiber in bytes. Default: 512KB.
+    pub stack_size: usize,
+    /// Initial number of fibers to pre-allocate per worker. Default: 128.
+    pub initial_pool_size: usize,
+}
+
+impl Default for FiberConfig {
+    fn default() -> Self {
+        Self {
+            stack_size: 512 * 1024,
+            initial_pool_size: 128,
+        }
+    }
+}
+
 /// The main job system managing worker threads and job execution.
 ///
 /// This is the primary interface for the fiber-based job system.
@@ -37,8 +55,13 @@ impl JobSystem {
     /// let job_system = JobSystem::new(4);
     /// ```
     pub fn new(num_threads: usize) -> Self {
+        Self::new_with_config(num_threads, FiberConfig::default())
+    }
+
+    /// Creates a new job system with custom configuration.
+    pub fn new_with_config(num_threads: usize, config: FiberConfig) -> Self {
         JobSystem {
-            worker_pool: WorkerPool::new(num_threads),
+            worker_pool: WorkerPool::new(num_threads, config),
         }
     }
 
@@ -61,7 +84,11 @@ impl JobSystem {
     /// ```
     pub fn new_with_affinity(num_threads: usize) -> Self {
         JobSystem {
-            worker_pool: WorkerPool::new_with_strategy(num_threads, crate::PinningStrategy::Linear),
+            worker_pool: WorkerPool::new_with_strategy(
+                num_threads,
+                crate::PinningStrategy::Linear,
+                FiberConfig::default(),
+            ),
         }
     }
 
@@ -81,7 +108,11 @@ impl JobSystem {
     /// ```
     pub fn new_with_strategy(num_threads: usize, strategy: crate::PinningStrategy) -> Self {
         JobSystem {
-            worker_pool: WorkerPool::new_with_strategy(num_threads, strategy),
+            worker_pool: WorkerPool::new_with_strategy(
+                num_threads,
+                strategy,
+                FiberConfig::default(),
+            ),
         }
     }
 
@@ -125,12 +156,20 @@ impl JobSystem {
         F: FnOnce() + Send + 'static,
     {
         let counter = Counter::new(1);
-        let counter_clone = counter.clone();
-
-        let job = Job::with_counter(work, counter_clone);
-
+        // Default to Normal priority
+        let job = Job::with_counter(work, counter.clone());
         self.worker_pool.submit(job);
+        counter
+    }
 
+    /// Submits a job with a specific priority.
+    pub fn run_priority<F>(&self, priority: crate::job::JobPriority, work: F) -> Counter
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let counter = Counter::new(1);
+        let job = Job::with_counter(work, counter.clone()).with_priority(priority);
+        self.worker_pool.submit(job);
         counter
     }
 
