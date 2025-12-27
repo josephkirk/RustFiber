@@ -384,21 +384,29 @@ impl JobSystem {
 
                     // Double check to avoid race condition (Missed Wakeup)
                     if counter.is_complete() {
-                        // Try to transition back to RUNNING
-                        if node_ref
-                            .state
-                            .compare_exchange(
-                                crate::fiber::NODE_STATE_WAITING,
-                                crate::fiber::NODE_STATE_RUNNING,
-                                Ordering::Relaxed,
-                                Ordering::Relaxed,
-                            )
-                            .is_ok()
-                        {
-                            // Successfully aborted.
-                            return;
-                        }
-                        // If failed, we were SIGNALED. Fall through to yield.
+                        // Stranded Waiter Fix:
+                        // If we added ourselves but the counter is already complete, the decrementer might have misses us
+                        // (because we added after the flush).
+                        // We must ensure the list is flushed.
+                        // We act as the "Cleanup Crew".
+                        counter.notify_all(&self.worker_pool);
+
+                        // If we successfully woke ourselves, we are now scheduled.
+                        // If we yielded, we would be woken.
+                        // But we can just return?
+                        // No, we yielded, so we MUST call yield_now(Wait) so the stack is preserved until the worker picks us up?
+                        // NO. If we are scheduled, we are in the Run Queue.
+                        // If we call yield_now(Wait), we suspend.
+                        // The worker loop will pick up the "scheduled" version of us (duplicate?).
+                        // Wait, notify_all calls Job::resume_job(handle).
+                        // This creates a NEW Job with the same FiberHandle.
+                        // If we are currently running, and we suspend...
+                        // The Worker will drop the "current" fiber reference.
+                        // Then the Worker loop continues.
+                        // It picks up the NEW Job.
+                        // It resumes the fiber.
+                        // Fiber returns from yield_now.
+                        // This is correct.
                     }
 
                     // Yield execution. We will be resumed when the counter signals us.

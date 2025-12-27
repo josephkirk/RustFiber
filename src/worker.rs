@@ -483,3 +483,9 @@ impl WorkerPool {
         }
     }
 }
+
+impl crate::counter::JobScheduler for WorkerPool {
+    fn schedule(&self, job: Job) {
+        self.submit(job);
+    }
+}
