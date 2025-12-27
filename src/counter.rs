@@ -163,6 +163,25 @@ impl Counter {
     }
 }
 
+/// An RAII guard that decrements the counter when dropped.
+pub struct CounterGuard<'a> {
+    counter: &'a Counter,
+    scheduler: &'a dyn JobScheduler,
+}
+
+impl<'a> CounterGuard<'a> {
+    /// Creates a new counter guard.
+    pub fn new(counter: &'a Counter, scheduler: &'a dyn JobScheduler) -> Self {
+        Self { counter, scheduler }
+    }
+}
+
+impl<'a> Drop for CounterGuard<'a> {
+    fn drop(&mut self) {
+        self.counter.decrement(self.scheduler);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
