@@ -302,7 +302,10 @@ impl JobSystem {
             unsafe {
                 let fiber = &*fiber_handle.0;
                 let node_ptr = fiber.wait_node.get();
-                let node_ref = &mut *node_ptr;
+                // Changed from &mut *node_ptr to &*node_ptr to avoid aliasing UB with the
+                // concurrent reader in Counter::decrement. Since all fields are atomic/UnsafeCell,
+                // shared reference is sufficient and correct.
+                let node_ref = &*node_ptr;
 
                 // Adaptive spinning phase (before adding to wait list)
                 // This is safe because we are not yet in the wait list, so no "Double Resume" is possible.
@@ -330,7 +333,7 @@ impl JobSystem {
                     }
 
                     // Initialize node for waiting
-                    node_ref.fiber_handle = fiber_handle;
+                    node_ref.fiber_handle.store(fiber_handle.0, Ordering::Relaxed);
                     node_ref
                         .state
                         .store(crate::fiber::NODE_STATE_WAITING, Ordering::Relaxed);

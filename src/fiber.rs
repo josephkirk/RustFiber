@@ -51,7 +51,7 @@ pub struct WaitNode {
     /// Atomic pointer to the next node in the list.
     pub next: AtomicPtr<WaitNode>,
     /// The handle to the fiber to be resumed.
-    pub fiber_handle: FiberHandle,
+    pub fiber_handle: AtomicPtr<Fiber>,
     /// State of the node for race-free signaling.
     pub state: AtomicU32,
 }
@@ -60,7 +60,7 @@ impl Default for WaitNode {
     fn default() -> Self {
         Self {
             next: AtomicPtr::new(std::ptr::null_mut()),
-            fiber_handle: FiberHandle::null(),
+            fiber_handle: AtomicPtr::new(std::ptr::null_mut()),
             state: AtomicU32::new(NODE_STATE_RUNNING),
         }
     }

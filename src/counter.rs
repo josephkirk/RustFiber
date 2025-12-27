@@ -73,7 +73,8 @@ impl Counter {
                     let next_node = node.next.load(Ordering::Relaxed);
 
                     // Recover the fiber handle and schedule it
-                    if !node.fiber_handle.is_null() {
+                    let fiber_ptr = node.fiber_handle.load(Ordering::Relaxed);
+                    if !fiber_ptr.is_null() {
                         // Optimistic check to avoid expensive CAS loop
                         let mut current_state = node.state.load(Ordering::Relaxed);
 
@@ -87,7 +88,8 @@ impl Counter {
                                 ) {
                                     Ok(_) => {
                                         // Successfully transitioned to signaled. Push to injector.
-                                        let job = Job::resume_job(node.fiber_handle);
+                                        use crate::fiber::FiberHandle;
+                                        let job = Job::resume_job(FiberHandle(fiber_ptr));
                                         scheduler.schedule(job);
                                         break;
                                     }
