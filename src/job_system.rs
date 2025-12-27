@@ -333,7 +333,9 @@ impl JobSystem {
                     }
 
                     // Initialize node for waiting
-                    node_ref.fiber_handle.store(fiber_handle.0, Ordering::Relaxed);
+                    node_ref
+                        .fiber_handle
+                        .store(fiber_handle.0, Ordering::Relaxed);
                     node_ref
                         .state
                         .store(crate::fiber::NODE_STATE_WAITING, Ordering::Relaxed);
