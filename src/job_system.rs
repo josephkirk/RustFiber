@@ -338,7 +338,7 @@ impl JobSystem {
                         .store(fiber_handle.0, Ordering::Relaxed);
                     node_ref
                         .state
-                        .store(crate::fiber::NODE_STATE_WAITING, Ordering::Relaxed);
+                        .store(crate::fiber::NODE_STATE_WAITING, Ordering::Release);
 
                     // Add to counter's wait list
                     counter.add_waiter(node_ptr);

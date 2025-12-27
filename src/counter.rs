@@ -73,45 +73,51 @@ impl Counter {
                     let next_node = node.next.load(Ordering::Relaxed);
 
                     // Recover the fiber handle and schedule it
-                    let fiber_ptr = node.fiber_handle.load(Ordering::Relaxed);
-                    if !fiber_ptr.is_null() {
-                        // Optimistic check to avoid expensive CAS loop
-                        let mut current_state = node.state.load(Ordering::Relaxed);
+                    // The handle must be visible if state implies it is set.
+                    // We use Acquire ordering on state check to synchronize with writer's Release.
+                    let mut current_state = node.state.load(Ordering::Acquire);
+                    #[allow(unused_assignments)]
+                    let mut fiber_ptr = std::ptr::null_mut();
 
-                        loop {
-                            if current_state == NODE_STATE_WAITING {
-                                match node.state.compare_exchange_weak(
-                                    NODE_STATE_WAITING,
-                                    NODE_STATE_SIGNALED,
-                                    Ordering::AcqRel,
-                                    Ordering::Relaxed,
-                                ) {
-                                    Ok(_) => {
-                                        // Successfully transitioned to signaled. Push to injector.
-                                        use crate::fiber::FiberHandle;
+                    // If we see WAITING, we must be able to see the fiber_ptr.
+                    loop {
+                        if current_state == NODE_STATE_WAITING {
+                            // Re-load fiber handle to be sure
+                            fiber_ptr = node.fiber_handle.load(Ordering::Relaxed);
+
+                            match node.state.compare_exchange_weak(
+                                NODE_STATE_WAITING,
+                                NODE_STATE_SIGNALED,
+                                Ordering::AcqRel,
+                                Ordering::Relaxed,
+                            ) {
+                                Ok(_) => {
+                                    // Successfully transitioned to signaled. Push to injector.
+                                    use crate::fiber::FiberHandle;
+                                    if !fiber_ptr.is_null() {
                                         let job = Job::resume_job(FiberHandle(fiber_ptr));
                                         scheduler.schedule(job);
-                                        break;
                                     }
-                                    Err(actual) => current_state = actual,
+                                    break;
                                 }
-                            } else if current_state == NODE_STATE_SPINNING {
-                                match node.state.compare_exchange_weak(
-                                    NODE_STATE_SPINNING,
-                                    NODE_STATE_SIGNALED,
-                                    Ordering::AcqRel,
-                                    Ordering::Relaxed,
-                                ) {
-                                    Ok(_) => {
-                                        // Spinner will wake itself up. Do NOT enqueue.
-                                        break;
-                                    }
-                                    Err(actual) => current_state = actual,
-                                }
-                            } else {
-                                // Already RUNNING or SIGNALED.
-                                break;
+                                Err(actual) => current_state = actual,
                             }
+                        } else if current_state == NODE_STATE_SPINNING {
+                            match node.state.compare_exchange_weak(
+                                NODE_STATE_SPINNING,
+                                NODE_STATE_SIGNALED,
+                                Ordering::AcqRel,
+                                Ordering::Relaxed,
+                            ) {
+                                Ok(_) => {
+                                    // Spinner will wake itself up. Do NOT enqueue.
+                                    break;
+                                }
+                                Err(actual) => current_state = actual,
+                            }
+                        } else {
+                            // Already RUNNING or SIGNALED.
+                            break;
                         }
                     }
 
