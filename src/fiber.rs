@@ -94,6 +94,10 @@ pub struct Fiber {
     /// The yielder for this fiber, set when the fiber starts.
     /// Valid only when the fiber is running.
     yielder: *const Yielder<FiberInput, YieldType>,
+
+    /// Flag to prevent double-resume hazards. 
+    /// Set to true when suspended, false when running.
+    pub is_suspended: std::sync::atomic::AtomicBool,
 }
 
 pub enum FiberState {
@@ -143,6 +147,7 @@ impl Fiber {
             stack,
             wait_node: UnsafeCell::new(WaitNode::default()),
             yielder: std::ptr::null(),
+            is_suspended: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

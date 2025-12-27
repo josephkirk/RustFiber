@@ -137,17 +137,34 @@ impl Worker {
                             // SAFETY: The handle comes from a Box<Fiber> that was leaked into raw pointer
                             // by the worker that suspended it. We reclaim ownership here.
                             let fiber = unsafe { Box::from_raw(handle.0) };
+
+                            // Hazard Protection: Ensure the fiber has actually suspended.
+                            // There is a race where a waker (decrement) schedules the fiber BEFORE
+                            // the previous owner (worker) has finished the context switch / yield.
+                            // We spin until the previous owner sets is_suspended = true.
+                            let spin_helper = crossbeam::utils::Backoff::new();
+                            while !fiber.is_suspended.load(Ordering::Acquire) {
+                                spin_helper.snooze();
+                            }
+
+                            // We are now the owner. Mark as running.
+                            fiber.is_suspended.store(false, Ordering::Relaxed);
+                            
                             (fiber, FiberInput::Resume)
                         }
                         work => {
                             // New job - acquire fiber from pool
                             let mut fiber = fiber_pool.get();
+                            
+                            // Initialize suspension state for new run
+                            fiber.is_suspended.store(false, Ordering::Relaxed);
+
                             // Reconstruct job (we moved work out)
                             let job = Job {
                                 work,
                                 counter: job.counter,
                             };
-
+                            
                             // Use local queue as scheduler for immediate wakeup locality if strategy permits
                             let scheduler: &dyn crate::counter::JobScheduler = match strategy {
                                 crate::PinningStrategy::TieredSpillover => &*injector,
@@ -166,9 +183,14 @@ impl Worker {
 
                     match state {
                         FiberState::Complete => {
+                            // Ensure flag is set for any concurrent waiters (though unlikely for Complete)
+                            fiber.is_suspended.store(true, Ordering::Release);
                             fiber_pool.return_fiber(fiber);
                         }
                         FiberState::Yielded(reason) => {
+                            // Mark as suspended implies we are done touching the stack/coroutine
+                            fiber.is_suspended.store(true, Ordering::Release);
+
                             let raw_fiber = Box::into_raw(fiber);
                             if let crate::fiber::YieldType::Normal = reason {
                                 // Reschedule dependent on strategy
@@ -177,7 +199,6 @@ impl Worker {
 
                                 match strategy {
                                     crate::PinningStrategy::TieredSpillover => {
-                                        // Push to global injector to wake up dormant threads
                                         // Push to global injector to wake up dormant threads
                                         injector.push(job);
                                     }
@@ -189,6 +210,9 @@ impl Worker {
                             }
                         }
                         FiberState::Panic(err) => {
+                            // Ensure flag is set so any concurrent waiters don't deadlock
+                            fiber.is_suspended.store(true, Ordering::Release);
+
                             let msg = if let Some(s) = err.downcast_ref::<&str>() {
                                 *s
                             } else if let Some(s) = err.downcast_ref::<String>() {
