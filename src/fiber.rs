@@ -128,7 +128,7 @@ impl Fiber {
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;
 
-                // Execute the job using the provided scheduler
+                    // Execute the job using the provided scheduler
                     // SAFETY: The scheduler reference is pinned/valid for the job execution.
                     let scheduler = &*scheduler_ptr;
                     job.execute(scheduler);

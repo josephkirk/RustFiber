@@ -1,15 +1,15 @@
 use rustfiber::counter::Counter;
 use rustfiber::job::Job;
 use rustfiber::worker::WorkerPool;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 #[test]
 fn test_panic_safety_counter_decrement() {
     let pool = WorkerPool::new(1);
     let counter = Counter::new(1);
-    
+
     // Create a job that panics
     let job = Job::with_counter(
         || {
@@ -24,17 +24,20 @@ fn test_panic_safety_counter_decrement() {
     std::thread::sleep(Duration::from_millis(100));
 
     // Counter should be decremented despite panic
-    assert!(counter.is_complete(), "Counter should be zero even after panic");
+    assert!(
+        counter.is_complete(),
+        "Counter should be zero even after panic"
+    );
 }
 
 #[test]
 fn test_worker_recovery_after_panic() {
     let pool = WorkerPool::new(1);
     let counter = Counter::new(1);
-    
+
     // 1. Submit panicking job
     pool.submit(Job::with_counter(|| panic!("Boom"), counter.clone()));
-    
+
     std::thread::sleep(Duration::from_millis(50));
     assert!(counter.is_complete());
 
@@ -42,10 +45,13 @@ fn test_worker_recovery_after_panic() {
     let success = Arc::new(AtomicBool::new(false));
     let success_clone = success.clone();
     let counter2 = Counter::new(1);
-    
-    pool.submit(Job::with_counter(move || {
-        success_clone.store(true, Ordering::SeqCst);
-    }, counter2.clone()));
+
+    pool.submit(Job::with_counter(
+        move || {
+            success_clone.store(true, Ordering::SeqCst);
+        },
+        counter2.clone(),
+    ));
 
     // Wait for second job
     let start = std::time::Instant::now();
@@ -56,5 +62,8 @@ fn test_worker_recovery_after_panic() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    assert!(success.load(Ordering::SeqCst), "Subsequent job failed to run");
+    assert!(
+        success.load(Ordering::SeqCst),
+        "Subsequent job failed to run"
+    );
 }

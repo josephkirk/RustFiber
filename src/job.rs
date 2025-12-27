@@ -121,7 +121,7 @@ impl Job {
                 panic!("Cannot execute a Resume job directly. Must be handled by worker loop.");
             }
         }
-        
+
         // _guard is dropped here, triggering decrement
     }
 }
