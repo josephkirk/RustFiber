@@ -17,6 +17,18 @@ pub struct Metrics {
     pub global_injector_pushes: AtomicU64,
     /// Total pops from global injector.
     pub global_injector_pops: AtomicU64,
+    /// Successful steals from other workers.
+    pub worker_steals_success: AtomicU64,
+    /// Failed steal attempts from other workers.
+    pub worker_steals_failed: AtomicU64,
+    /// Steal attempts from other workers that need retry (contention).
+    pub worker_steals_retry: AtomicU64,
+    /// Successful steals from global injector.
+    pub injector_steals_success: AtomicU64,
+    /// Failed steal attempts from global injector.
+    pub injector_steals_failed: AtomicU64,
+    /// Steal attempts from global injector that need retry (contention).
+    pub injector_steals_retry: AtomicU64,
     /// Time when metrics collection started.
     pub start_time: Instant,
 }
@@ -31,6 +43,12 @@ impl Metrics {
             local_queue_pops: AtomicU64::new(0),
             global_injector_pushes: AtomicU64::new(0),
             global_injector_pops: AtomicU64::new(0),
+            worker_steals_success: AtomicU64::new(0),
+            worker_steals_failed: AtomicU64::new(0),
+            worker_steals_retry: AtomicU64::new(0),
+            injector_steals_success: AtomicU64::new(0),
+            injector_steals_failed: AtomicU64::new(0),
+            injector_steals_retry: AtomicU64::new(0),
             start_time: Instant::now(),
         }
     }
@@ -43,6 +61,12 @@ impl Metrics {
             local_queue_pops: self.local_queue_pops.load(Ordering::Relaxed),
             global_injector_pushes: self.global_injector_pushes.load(Ordering::Relaxed),
             global_injector_pops: self.global_injector_pops.load(Ordering::Relaxed),
+            worker_steals_success: self.worker_steals_success.load(Ordering::Relaxed),
+            worker_steals_failed: self.worker_steals_failed.load(Ordering::Relaxed),
+            worker_steals_retry: self.worker_steals_retry.load(Ordering::Relaxed),
+            injector_steals_success: self.injector_steals_success.load(Ordering::Relaxed),
+            injector_steals_failed: self.injector_steals_failed.load(Ordering::Relaxed),
+            injector_steals_retry: self.injector_steals_retry.load(Ordering::Relaxed),
             elapsed_seconds: self.start_time.elapsed().as_secs_f64(),
         }
     }
@@ -57,6 +81,12 @@ pub struct MetricsSnapshot {
     pub local_queue_pops: u64,
     pub global_injector_pushes: u64,
     pub global_injector_pops: u64,
+    pub worker_steals_success: u64,
+    pub worker_steals_failed: u64,
+    pub worker_steals_retry: u64,
+    pub injector_steals_success: u64,
+    pub injector_steals_failed: u64,
+    pub injector_steals_retry: u64,
     pub elapsed_seconds: f64,
 }
 
@@ -94,6 +124,12 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.jobs_completed, 0);
         assert_eq!(snapshot.local_queue_pushes, 0);
+        assert_eq!(snapshot.worker_steals_success, 0);
+        assert_eq!(snapshot.worker_steals_failed, 0);
+        assert_eq!(snapshot.worker_steals_retry, 0);
+        assert_eq!(snapshot.injector_steals_success, 0);
+        assert_eq!(snapshot.injector_steals_failed, 0);
+        assert_eq!(snapshot.injector_steals_retry, 0);
         assert!(snapshot.elapsed_seconds >= 0.0);
     }
 

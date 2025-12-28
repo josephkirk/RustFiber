@@ -1,11 +1,8 @@
-pub mod allocation;
-pub mod batching_benchmark;
-pub mod fibonacci;
-pub mod nas_benchmarks;
-pub mod producer_consumer;
-pub mod quicksort;
-pub mod startup_latency;
 pub mod utils;
+pub mod latency;
+pub mod throughput;
+pub mod stress;
+pub mod transform;
 
 use rustfiber::PinningStrategy;
 use std::sync::Arc;
@@ -43,6 +40,11 @@ fn main() {
         false
     };
 
+    #[cfg(feature = "tracing")]
+    let _collector = rustfiber::tracing::CollectorGuard;
+    #[cfg(feature = "tracing")]
+    rustfiber::worker::WORKER_ID.with(|id| id.set(Some(99)));
+
     eprintln!("=======================================================");
     eprintln!("           RustFiber Benchmark Suite");
     eprintln!("=======================================================");
@@ -53,8 +55,16 @@ fn main() {
 
     // One-time Global Initialization (OS Settle + Warmup)
     eprintln!("\n[STARTUP] Initializing Global Job System...");
-    let job_system =
-        std::sync::Arc::new(rustfiber::JobSystem::new_with_strategy(threads, strategy));
+    let mut job_system_builder = rustfiber::JobSystem::builder()
+        .thread_count(threads)
+        .pinning_strategy(strategy);
+
+    #[cfg(feature = "metrics")]
+    {
+        job_system_builder = job_system_builder.enable_metrics(enable_metrics);
+    }
+
+    let job_system = std::sync::Arc::new(job_system_builder.build());
 
     eprintln!("[STARTUP] Waiting 20ms for OS thread stabilization...");
     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -69,15 +79,11 @@ fn main() {
     eprintln!("=======================================================");
 
     let runs: Vec<fn(&rustfiber::JobSystem, PinningStrategy, usize) -> utils::BenchmarkResult> = vec![
-        startup_latency::run_startup_latency_benchmark,
-        fibonacci::run_fibonacci_benchmark,
-        quicksort::run_quicksort_benchmark,
-        producer_consumer::run_producer_consumer_benchmark,
-        nas_benchmarks::run_nas_ep_benchmark,
-        nas_benchmarks::run_nas_mg_benchmark,
-        nas_benchmarks::run_nas_cg_benchmark,
-        batching_benchmark::run_batching_benchmark,
-        allocation::run_allocation_benchmark,
+        latency::run_empty_job_latency_benchmark,
+        throughput::run_dependency_graph_benchmark,
+        throughput::run_parallel_for_scaling_benchmark,
+        stress::run_work_stealing_stress_benchmark,
+        transform::run_transform_hierarchy_benchmark,
     ];
 
     for run in runs {
@@ -94,6 +100,16 @@ fn main() {
         js.shutdown().ok();
     } else {
         eprintln!("Warning: Could not shutdown job system cleanly");
+    }
+
+    #[cfg(feature = "tracing")]
+    {
+        rustfiber::tracing::collect_local_trace();
+        if let Err(e) = rustfiber::tracing::export_to_file("trace.json") {
+            eprintln!("Error exporting trace: {}", e);
+        } else {
+            eprintln!("Trace exported to trace.json");
+        }
     }
 
     eprintln!("\n=======================================================");

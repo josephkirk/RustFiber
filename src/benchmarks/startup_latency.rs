@@ -57,8 +57,8 @@ pub fn run_startup_latency_benchmark(
         data_points.push(DataPoint {
             num_tasks: 0, // Not applicable for startup benchmark
             time_ms: startup_ms,
+            metric_type: None,
         });
-    }
 
     BenchmarkResult {
         name: "Startup Latency".to_string(),
@@ -66,6 +66,8 @@ pub fn run_startup_latency_benchmark(
         system_info,
         crashed: false,
         crash_point: None,
+        #[cfg(feature = "metrics")]
+        internal_metrics: None, // Startup benchmark is about system creation/destruction
         timed_out: false,
     }
 }

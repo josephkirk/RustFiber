@@ -152,6 +152,7 @@ pub fn run_nas_ep_benchmark(
         data_points.push(DataPoint {
             num_tasks: size,
             time_ms: elapsed_ms,
+            metric_type: None,
         });
     }
 
@@ -162,6 +163,8 @@ pub fn run_nas_ep_benchmark(
         crashed: false,
         crash_point: None,
         timed_out,
+        #[cfg(feature = "metrics")]
+        internal_metrics: crate::utils::capture_internal_metrics(job_system),
     }
 }
 
@@ -199,6 +202,7 @@ pub fn run_nas_mg_benchmark(
         data_points.push(DataPoint {
             num_tasks: size,
             time_ms: elapsed_ms,
+            metric_type: None,
         });
     }
 
@@ -209,6 +213,8 @@ pub fn run_nas_mg_benchmark(
         crashed: false,
         crash_point: None,
         timed_out,
+        #[cfg(feature = "metrics")]
+        internal_metrics: crate::utils::capture_internal_metrics(job_system),
     }
 }
 
@@ -246,6 +252,7 @@ pub fn run_nas_cg_benchmark(
         data_points.push(DataPoint {
             num_tasks: size,
             time_ms: elapsed_ms,
+            metric_type: None,
         });
     }
 
@@ -256,5 +263,7 @@ pub fn run_nas_cg_benchmark(
         crashed: false,
         crash_point: None,
         timed_out,
+        #[cfg(feature = "metrics")]
+        internal_metrics: crate::utils::capture_internal_metrics(job_system),
     }
 }

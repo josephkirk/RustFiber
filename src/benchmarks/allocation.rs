@@ -85,6 +85,7 @@ pub fn run_allocation_benchmark(
         data_points.push(DataPoint {
             num_tasks: count,
             time_ms: duration_ms,
+            metric_type: None,
         });
     }
 
@@ -92,6 +93,8 @@ pub fn run_allocation_benchmark(
         name: "Allocation Throughput".to_string(),
         system_info,
         data_points,
+        #[cfg(feature = "metrics")]
+        internal_metrics: crate::utils::capture_internal_metrics(system),
         crashed: false,
         crash_point: None,
         timed_out,

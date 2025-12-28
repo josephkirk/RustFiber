@@ -120,6 +120,7 @@ pub fn run_producer_consumer_benchmark(
         data_points.push(DataPoint {
             num_tasks: num_items,
             time_ms: elapsed_ms,
+            metric_type: None,
         });
     }
 
@@ -129,6 +130,8 @@ pub fn run_producer_consumer_benchmark(
         system_info,
         crashed: false,
         crash_point: None,
+        #[cfg(feature = "metrics")]
+        internal_metrics: crate::utils::capture_internal_metrics(job_system),
         timed_out,
     }
 }
