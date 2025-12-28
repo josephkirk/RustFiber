@@ -21,7 +21,9 @@ pub fn run_producer_consumer_benchmark(
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let test_sizes = vec![100, 1_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000];
+    let test_sizes = vec![
+        100, 1_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000,
+    ];
 
     let mut data_points = Vec::new();
     let mut timed_out = false;

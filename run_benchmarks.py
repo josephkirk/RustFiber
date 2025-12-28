@@ -47,6 +47,7 @@ def run_rust_benchmarks(strategy, thread_count):
         "Benchmark 4b: NAS MG (Multi-Grid)": "benchmark_4b_nas_mg.png",
         "Benchmark 4c: NAS CG (Conjugate Gradient)": "benchmark_4c_nas_cg.png",
         "Batching (Parallel For Auto)": "benchmark_batching.png",
+        "Allocation Throughput": "benchmark_allocation.png",
     }
 
     cmd = ["cargo", "run", "--bin", "benchmarks", "--release", "--", strategy, str(thread_count)]
@@ -107,6 +108,7 @@ def create_comparison_graph(benchmark_name, results_list, output_filename, compa
         colormap = plt.cm.get_cmap('tab10')
     
     for i, result in enumerate(results_list):
+        benchmark_name_actual = result.get('name', benchmark_name)
         data_points = result['data_points']
         if not data_points:
             continue
@@ -119,14 +121,32 @@ def create_comparison_graph(benchmark_name, results_list, output_filename, compa
             label = f"{system_info['pinning_strategy']}"
             
         num_tasks = [dp['num_tasks'] for dp in data_points]
-        time_ms = [dp['time_ms'] for dp in data_points]
         
-        plt.plot(num_tasks, time_ms, '-o', label=label, linewidth=2, markersize=6, color=colormap(i % 10))
+        # Decide Y axis data and label based on benchmark type
+        if any(x in benchmark_name for x in ["Allocation", "Batching", "Fibonacci", "EP", "QuickSort"]):
+            y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
+            if "QuickSort" in benchmark_name:
+                y_label = "Time per Element (ns)"
+            else:
+                y_label = "Time per Task (ns)"
+        elif any(x in benchmark_name for x in ["MG", "CG"]):
+             y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
+             y_label = "Time per Grid/Matrix Unit (ns)"
+        else:
+            y_data = [dp['time_ms'] for dp in data_points]
+            y_label = "Total Time (ms)"
+        
+        plt.plot(num_tasks, y_data, '-o', label=label, linewidth=2, markersize=6, color=colormap(i % 10))
 
-    plt.xlabel('Number of Tasks', fontsize=12)
-    plt.ylabel('Time (ms)', fontsize=12)
+    plt.xlabel('Number of Tasks / Items', fontsize=12)
+    plt.ylabel(y_label, fontsize=12)
     plt.title(f"{benchmark_name}\nComparison by {comparison_label.capitalize()}", fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
+    
+    # Ensure Y starts at 0 to see scaling efficiency/flatness
+    if "ns" in y_label:
+        plt.ylim(bottom=0)
+
     plt.legend()
     
     # Add system info text box
@@ -156,14 +176,32 @@ def create_single_graph(benchmark_data, output_filename):
         return
     
     num_tasks = [dp['num_tasks'] for dp in data_points]
-    time_ms = [dp['time_ms'] for dp in data_points]
+    
+    # Decide Y axis data and label based on benchmark type
+    if any(x in name for x in ["Allocation", "Batching", "Fibonacci", "EP", "QuickSort"]):
+        y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
+        if "QuickSort" in name:
+            y_label = "Time per Element (ns)"
+        else:
+            y_label = "Time per Task (ns)"
+    elif any(x in name for x in ["MG", "CG"]):
+        y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
+        y_label = "Time per Grid/Matrix Unit (ns)"
+    else:
+        y_data = [dp['time_ms'] for dp in data_points]
+        y_label = "Total Time (ms)"
     
     plt.figure(figsize=(10, 6))
-    plt.plot(num_tasks, time_ms, 'b-o', linewidth=2, markersize=8)
-    plt.xlabel('Number of Tasks', fontsize=12)
-    plt.ylabel('Time (ms)', fontsize=12)
+    plt.plot(num_tasks, y_data, 'b-o', linewidth=2, markersize=8)
+    plt.xlabel('Number of Tasks / Items', fontsize=12)
+    plt.ylabel(y_label, fontsize=12)
     plt.title(f"{name}\nStrategy: {system_info['pinning_strategy']} | Threads: {system_info['cpu_cores']}", fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
+    
+    # Ensure Y starts at 0 to see scaling efficiency/flatness
+    if "ns" in y_label:
+        plt.ylim(bottom=0)
+
     
     info_text = f"System: {system_info['cpu_cores']} Threads, {system_info['total_memory_gb']:.2f} GB RAM | {system_info['pinning_strategy']}"
     plt.figtext(0.5, 0.01, info_text, ha='center', fontsize=10, 
