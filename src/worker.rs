@@ -17,6 +17,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
+/// Error type for worker pool operations.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkerPoolError {
+    /// One or more worker threads failed to join during shutdown.
+    #[error("{failed_count} worker thread(s) panicked")]
+    WorkerPanic { failed_count: usize },
+}
+
 // Thread-Local Storage for the worker's FrameAllocator
 thread_local! {
     static ACTIVE_ALLOCATOR: Cell<Option<*mut FrameAllocator>> = const { Cell::new(None) };
@@ -607,7 +615,7 @@ impl WorkerPool {
     }
 
     /// Shuts down the worker pool and waits for all threads to finish.
-    pub fn shutdown(self) -> Result<(), usize> {
+    pub fn shutdown(self) -> Result<(), WorkerPoolError> {
         while !self.injector.is_empty() {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -625,7 +633,7 @@ impl WorkerPool {
         }
 
         if failed_count > 0 {
-            Err(failed_count)
+            Err(WorkerPoolError::WorkerPanic { failed_count })
         } else {
             Ok(())
         }

@@ -6,9 +6,21 @@
 
 use crate::counter::Counter;
 use crate::job::Job;
-use crate::worker::WorkerPool;
+use crate::worker::{WorkerPool, WorkerPoolError};
 use std::thread;
 use std::time::Duration;
+
+/// Error type for job system operations.
+#[derive(Debug, thiserror::Error)]
+pub enum JobSystemError {
+    /// One or more worker threads panicked during execution.
+    #[error("{count} worker thread(s) panicked")]
+    WorkerPanic { count: usize },
+
+    /// Shutdown timed out waiting for jobs to complete.
+    #[error("shutdown timed out")]
+    ShutdownTimeout,
+}
 
 /// Configuration for the fiber system.
 #[derive(Clone, Debug)]
@@ -621,10 +633,15 @@ impl JobSystem {
     /// Shuts down the job system, waiting for all jobs to complete.
     ///
     /// Returns Ok if shutdown was successful, or Err if any worker threads panicked.
-    pub fn shutdown(self) -> Result<(), String> {
-        self.worker_pool
-            .shutdown()
-            .map_err(|count| format!("{} worker thread(s) panicked", count))
+    pub fn shutdown(self) -> Result<(), JobSystemError> {
+        match self.worker_pool.shutdown() {
+            Ok(()) => Ok(()),
+            Err(WorkerPoolError::WorkerPanic { failed_count }) => {
+                Err(JobSystemError::WorkerPanic {
+                    count: failed_count,
+                })
+            }
+        }
     }
 }
 
@@ -752,5 +769,34 @@ mod tests {
         job_system.wait_for_counter(&counter);
         assert_eq!(data.load(Ordering::Relaxed), len);
         job_system.shutdown().expect("Shutdown failed");
+    }
+
+    #[test]
+    fn test_shutdown_success() {
+        let job_system = JobSystem::new(2);
+
+        // Submit a normal job
+        let counter = job_system.run(|| {
+            // Normal job
+        });
+
+        job_system.wait_for_counter(&counter);
+
+        // Shutdown should succeed
+        let result = job_system.shutdown();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_error_types_and_display() {
+        // Test JobSystemError display
+        let error = JobSystemError::WorkerPanic { count: 3 };
+        assert_eq!(format!("{}", error), "3 worker thread(s) panicked");
+
+        let timeout_error = JobSystemError::ShutdownTimeout;
+        assert_eq!(format!("{}", timeout_error), "shutdown timed out");
+
+        // Test that errors implement std::error::Error
+        let _: &dyn std::error::Error = &error;
     }
 }
