@@ -3,6 +3,90 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
+fn test_topology_detection() {
+    let topology = rustfiber::topology::Topology::detect();
+
+    // Basic validation
+    assert!(
+        topology.num_nodes > 0,
+        "Should detect at least one NUMA node"
+    );
+    assert!(
+        !topology.core_to_node.is_empty(),
+        "Should map cores to nodes"
+    );
+    assert!(
+        !topology.node_cores.is_empty(),
+        "Should have node-to-cores mapping"
+    );
+
+    // Validate mappings are consistent
+    for (core_id, &node_id) in &topology.core_to_node {
+        assert!(
+            topology.node_cores.contains_key(&node_id),
+            "Node {} should exist in node_cores",
+            node_id
+        );
+        assert!(
+            topology.node_cores[&node_id].contains(core_id),
+            "Core {} should be in node {} cores list",
+            core_id,
+            node_id
+        );
+    }
+
+    // Validate all cores in node_cores are mapped back to cores
+    for (node_id, cores) in &topology.node_cores {
+        for &core_id in cores {
+            assert_eq!(
+                topology.core_to_node.get(&core_id),
+                Some(node_id),
+                "Core {} should map to node {}",
+                core_id,
+                node_id
+            );
+        }
+    }
+
+    println!(
+        "Detected topology: {} NUMA nodes, {} cores total",
+        topology.num_nodes,
+        topology.core_to_node.len()
+    );
+    for (node_id, cores) in &topology.node_cores {
+        println!("  Node {}: {} cores {:?}", node_id, cores.len(), cores);
+    }
+}
+
+#[test]
+fn test_topology_siblings() {
+    let topology = rustfiber::topology::Topology::detect();
+
+    // Test sibling detection for each core
+    for core_id in 0..topology.core_to_node.len() {
+        let siblings = topology.get_siblings(core_id);
+        assert!(siblings.is_some(), "Core {} should have siblings", core_id);
+
+        let siblings = siblings.unwrap();
+        assert!(
+            !siblings.is_empty(),
+            "Core {} should have at least itself as sibling",
+            core_id
+        );
+
+        // All siblings should be in the same NUMA node
+        let expected_node = topology.core_to_node[&core_id];
+        for &sibling_id in siblings {
+            assert_eq!(
+                topology.core_to_node[&sibling_id], expected_node,
+                "Sibling {} should be in same node {} as core {}",
+                sibling_id, expected_node, core_id
+            );
+        }
+    }
+}
+
+#[test]
 fn test_topology_local_allocation_end_to_end() {
     let system = JobSystem::new(2);
     let was_frame_allocated = Arc::new(AtomicBool::new(false));

@@ -93,6 +93,87 @@ def sanitize_filename(name):
     return name.lower().replace(':', '').replace(' ', '_').replace('(', '').replace(')', '').replace('[', '').replace(']', '')
 
 
+def create_overhead_comparison_graph(benchmark_name, results_list, output_filename, comparison_label):
+    """Create a comparison graph with multiple series for overhead analysis (< 10k items)."""
+    if not results_list:
+        return
+    
+    plt.figure(figsize=(12, 7))
+    
+    # Use a color map for distinct lines
+    try:
+        colormap = matplotlib.colormaps['tab10']
+    except AttributeError:
+        # Fallback for older matplotlib versions
+        colormap = plt.cm.get_cmap('tab10')
+    
+    # Decide Y axis label based on benchmark type (same for all results)
+    if any(x in benchmark_name for x in ["Allocation", "Batching", "Fibonacci", "EP", "QuickSort"]):
+        if "QuickSort" in benchmark_name:
+            y_label = "Time per Element (ns)"
+        else:
+            y_label = "Time per Task (ns)"
+    elif any(x in benchmark_name for x in ["MG", "CG"]):
+        y_label = "Time per Grid/Matrix Unit (ns)"
+    else:
+        y_label = "Total Time (ms)"
+    
+    for i, result in enumerate(results_list):
+        benchmark_name_actual = result.get('name', benchmark_name)
+        data_points = result['data_points']
+        if not data_points:
+            continue
+            
+        # Filter for data points with less than 10k items (overhead analysis)
+        data_points = [dp for dp in data_points if dp['num_tasks'] < 10000]
+        if not data_points:
+            continue
+            
+        system_info = result['system_info']
+        label = ""
+        if comparison_label == "cores":
+            label = f"{system_info['cpu_cores']} Cores"
+        elif comparison_label == "strategies":
+            label = f"{system_info['pinning_strategy']}"
+            
+        num_tasks = [dp['num_tasks'] for dp in data_points]
+        
+        # Calculate Y axis data based on benchmark type
+        if y_label == "Total Time (ms)":
+            y_data = [dp['time_ms'] for dp in data_points]
+        else:
+            y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
+        
+        plt.plot(num_tasks, y_data, '-o', label=label, linewidth=2, markersize=6, color=colormap(i % 10))
+
+    plt.xlabel('Number of Tasks / Items', fontsize=12)
+    plt.ylabel(y_label, fontsize=12)
+    plt.title(f"{benchmark_name} (Overhead Analysis)\nComparison by {comparison_label.capitalize()}", fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    
+    # Ensure Y starts at 0 to see scaling efficiency/flatness
+    if "ns" in y_label:
+        plt.ylim(bottom=0)
+
+    plt.legend()
+    
+    # Add system info text box
+    phys_cores = psutil.cpu_count(logical=False)
+    log_cores = psutil.cpu_count(logical=True)
+    total_ram = psutil.virtual_memory().total / (1024**3)
+    info_text = f"Hardware: {phys_cores} Phys Cores, {log_cores} Log Cores, {total_ram:.2f} GB RAM"
+    plt.figtext(0.5, 0.01, info_text, ha='center', fontsize=10, 
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.12)
+    
+    output_path = Path("docs") / output_filename
+    plt.savefig(output_path, dpi=100, bbox_inches='tight')
+    plt.close()
+    print(f"Done: Saved overhead comparison graph to {output_path}")
+
+
 def create_comparison_graph(benchmark_name, results_list, output_filename, comparison_label):
     """Create a comparison graph with multiple series."""
     if not results_list:
@@ -107,9 +188,25 @@ def create_comparison_graph(benchmark_name, results_list, output_filename, compa
         # Fallback for older matplotlib versions
         colormap = plt.cm.get_cmap('tab10')
     
+    # Decide Y axis label based on benchmark type (same for all results)
+    if any(x in benchmark_name for x in ["Allocation", "Batching", "Fibonacci", "EP", "QuickSort"]):
+        if "QuickSort" in benchmark_name:
+            y_label = "Time per Element (ns)"
+        else:
+            y_label = "Time per Task (ns)"
+    elif any(x in benchmark_name for x in ["MG", "CG"]):
+        y_label = "Time per Grid/Matrix Unit (ns)"
+    else:
+        y_label = "Total Time (ms)"
+    
     for i, result in enumerate(results_list):
         benchmark_name_actual = result.get('name', benchmark_name)
         data_points = result['data_points']
+        if not data_points:
+            continue
+            
+        # Filter out data points with less than 10k items
+        data_points = [dp for dp in data_points if dp['num_tasks'] >= 10000]
         if not data_points:
             continue
             
@@ -122,19 +219,11 @@ def create_comparison_graph(benchmark_name, results_list, output_filename, compa
             
         num_tasks = [dp['num_tasks'] for dp in data_points]
         
-        # Decide Y axis data and label based on benchmark type
-        if any(x in benchmark_name for x in ["Allocation", "Batching", "Fibonacci", "EP", "QuickSort"]):
-            y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
-            if "QuickSort" in benchmark_name:
-                y_label = "Time per Element (ns)"
-            else:
-                y_label = "Time per Task (ns)"
-        elif any(x in benchmark_name for x in ["MG", "CG"]):
-             y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
-             y_label = "Time per Grid/Matrix Unit (ns)"
-        else:
+        # Calculate Y axis data based on benchmark type
+        if y_label == "Total Time (ms)":
             y_data = [dp['time_ms'] for dp in data_points]
-            y_label = "Total Time (ms)"
+        else:
+            y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
         
         plt.plot(num_tasks, y_data, '-o', label=label, linewidth=2, markersize=6, color=colormap(i % 10))
 
@@ -172,6 +261,11 @@ def create_single_graph(benchmark_data, output_filename):
     data_points = benchmark_data['data_points']
     system_info = benchmark_data['system_info']
     
+    if not data_points:
+        return
+    
+    # Filter out data points with less than 10k items
+    data_points = [dp for dp in data_points if dp['num_tasks'] >= 10000]
     if not data_points:
         return
     
@@ -215,6 +309,61 @@ def create_single_graph(benchmark_data, output_filename):
     plt.close()
 
 
+def create_overhead_single_graph(benchmark_data, output_filename):
+    """Create a standard PNG graph from a single benchmark run for overhead analysis (< 10k items)."""
+    name = benchmark_data['name']
+    data_points = benchmark_data['data_points']
+    system_info = benchmark_data['system_info']
+    
+    if not data_points:
+        return
+    
+    # Filter for data points with less than 10k items (overhead analysis)
+    data_points = [dp for dp in data_points if dp['num_tasks'] < 10000]
+    if not data_points:
+        return
+    
+    num_tasks = [dp['num_tasks'] for dp in data_points]
+    
+    # Decide Y axis data and label based on benchmark type
+    if any(x in name for x in ["Allocation", "Batching", "Fibonacci", "EP", "QuickSort"]):
+        y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
+        if "QuickSort" in name:
+            y_label = "Time per Element (ns)"
+        else:
+            y_label = "Time per Task (ns)"
+    elif any(x in name for x in ["MG", "CG"]):
+        y_data = [(dp['time_ms'] * 1e6) / dp['num_tasks'] if dp['num_tasks'] > 0 else 0 for dp in data_points]
+        y_label = "Time per Grid/Matrix Unit (ns)"
+    else:
+        y_data = [dp['time_ms'] for dp in data_points]
+        y_label = "Total Time (ms)"
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(num_tasks, y_data, 'r-o', linewidth=2, markersize=8)  # Red color for overhead graphs
+    plt.xlabel('Number of Tasks / Items', fontsize=12)
+    plt.ylabel(y_label, fontsize=12)
+    plt.title(f"{name} (Overhead Analysis)\nStrategy: {system_info['pinning_strategy']} | Threads: {system_info['cpu_cores']}", fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    
+    # Ensure Y starts at 0 to see scaling efficiency/flatness
+    if "ns" in y_label:
+        plt.ylim(bottom=0)
+
+    
+    info_text = f"System: {system_info['cpu_cores']} Threads, {system_info['total_memory_gb']:.2f} GB RAM | {system_info['pinning_strategy']}"
+    plt.figtext(0.5, 0.01, info_text, ha='center', fontsize=10, 
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.12)
+    
+    output_path = Path("docs") / output_filename
+    plt.savefig(output_path, dpi=100, bbox_inches='tight')
+    plt.close()
+    print(f"Done: Saved overhead single graph to {output_path}")
+
+
 def main():
     """Main entry point."""
     print("=" * 60)
@@ -256,6 +405,9 @@ def main():
             safe_name = sanitize_filename(name)
             filename = f"comparison_cores_{safe_name}.png"
             create_comparison_graph(name, results, filename, "cores")
+            # Also create overhead graphs
+            overhead_filename = f"comparison_cores_{safe_name}_overhead.png"
+            create_overhead_comparison_graph(name, results, overhead_filename, "cores")
 
     elif mode == "compare-strategies":
         actual_cores = logical_cores
@@ -280,6 +432,9 @@ def main():
             safe_name = sanitize_filename(name)
             filename = f"comparison_strategies_{safe_name}.png"
             create_comparison_graph(name, results, filename, "strategies")
+            # Also create overhead graphs
+            overhead_filename = f"comparison_strategies_{safe_name}_overhead.png"
+            create_overhead_comparison_graph(name, results, overhead_filename, "strategies")
     
     else: # single mode
         actual_cores = logical_cores
@@ -296,6 +451,9 @@ def main():
             filename = f"single_{safe_name}_{threads}c_{strategy}.png"
             create_single_graph(result, filename)
             print(f"Done: {name} -> docs/{filename}")
+            # Also create overhead graphs
+            overhead_filename = f"single_{safe_name}_{threads}c_{strategy}_overhead.png"
+            create_overhead_single_graph(result, overhead_filename)
 
     print("\n" + "=" * 60)
     print("All benchmarks and graphs completed!")
