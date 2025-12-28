@@ -1,10 +1,22 @@
-#!/usr/bin/env python3
 """
 Benchmark runner script for RustFiber.
-Runs benchmarks and generates high-quality visualization graphs.
+
+Runs the full benchmark suite using specified Thread Pinning Strategies.
+Generates high-quality visualization graphs for analysis.
 
 Usage:
-    uv run run_benchmarks.py [--compare-cores | --compare-strategies | strategy_name] [threads] [--trace]
+    uv run run_benchmarks.py [strategy] [max_threads] [--trace] [--all-strategies]
+
+Pinning Strategies:
+    - linear:           Pin workers to logical cores 0..N (Default).
+    - avoid-smt:        Pin to physical cores only (avoid hyper-threads).
+    - ccd-isolation:    Pin to first CCD only (low latency).
+    - tiered-spillover: Complex dynamic pinning.
+    - none:             No pinning (OS Scheduler).
+
+Options:
+    --all-strategies:   Run the suite for ALL valid strategies sequentially.
+    --trace:            Enable Chrome Tracing (trace.json) for the first run.
 """
 
 import json
@@ -345,52 +357,91 @@ def print_runs_summary(name, results, config):
         runs_str = ", ".join(runs_formatted)
         print(f"  {name: <30} | Runs: [{runs_str}] {unit} | Avg: {avg:.2f} {unit}")
 
+
 def main():
     print("=== RustFiber Benchmark Visualizer ===")
     
     # Filter out flags
     args = [arg for arg in sys.argv if not arg.startswith('--')]
     use_tracing = "--trace" in sys.argv
+
+    # 1. Parse Arguments
+    valid_strategies = ['linear', 'avoid-smt', 'ccd-isolation', 'tiered-spillover', 'none']
     
-    # 1. Get Strategy
-    strategy = args[1] if len(args) > 1 else "linear"
-    
+    selected_strategies = []
+    if '--all-strategies' in sys.argv:
+        selected_strategies = valid_strategies
+    else:
+        # Default to linear if no strategy specified
+        strategy_arg = args[1] if len(args) > 1 else "linear"
+        if strategy_arg in valid_strategies:
+            selected_strategies = [strategy_arg]
+        else:
+            # Fallback for old behavior (e.g. "stress" metric mode check, though user said strategy option is specific)
+            # If user passed "stress" thinking it's a strategy, we defaults to 'linear' pinning usually
+            # But let's stick to strict strategy names for now based on user request.
+            # If unknown, default to linear but keep arg for potentially other uses? 
+            # Actually, per user request, we should strictly use lib.rs strategies.
+            # If arg is NOT a strategy, we assume it's linear and maybe it's a thread count?
+            # Let's simple check.
+             selected_strategies = ["linear"]
+             if strategy_arg not in valid_strategies and len(args) > 1:
+                 # Check if it's a number (thread count)
+                 try:
+                     int(strategy_arg)
+                     # It's a thread count, so strategy is default linear
+                 except ValueError:
+                     print(f"Warning: Unknown strategy '{strategy_arg}'. Using 'linear'.")
+
     # 2. Get Max Threads
-    max_threads = int(args[2]) if len(args) > 2 else psutil.cpu_count(logical=True)
-    
+    # Try to find the int argument
+    max_threads = psutil.cpu_count(logical=True)
+    for arg in args[1:]:
+        try:
+            val = int(arg)
+            max_threads = val
+            break
+        except ValueError:
+            continue
+
     # 3. Generate Sweep
+    # We want a scaling sweep for all strategies to generate meaningful graphs
     sweep_counts = get_sweep_counts(max_threads)
     
-    print(f" Execution Sweep (Strategy={strategy}): {sweep_counts}")
-    if use_tracing:
-        print(f" Tracing enabled for first run of each benchmark.")
+    print(f" Execution Sweep: {sweep_counts}")
+    print(f" Strategies: {selected_strategies}")
 
     all_results = {}
-    sweep_mode = 'scaling' if len(sweep_counts) > 1 else 'single'
-    os.environ['BENCH_MODE'] = sweep_mode
+    sweep_mode = 'scaling'
 
-    for tc in sweep_counts:
-        print(f" Running with {tc} Threads...")
-        # Only trace the first core count to avoid massive trace files
-        trace_this_run = use_tracing and tc == sweep_counts[0]
+    for strategy in selected_strategies:
+        print(f"\n>>> Running Strategy: {strategy.upper()} <<<")
         
-        for res in run_rust_benchmarks(strategy, tc, trace_this_run):
-            all_results.setdefault(res['name'], []).append(res)
-    
-    print("\n" + "="*60)
-    print(f" FINAL SCALING SUMMARY")
-    print("="*60)
-
-    for name, results in all_results.items():
-        if not results: continue
-        config = get_metric_config(name, results[0]['data_points'])
-        print_runs_summary(name, results, config)
+        # Run the full sweep for this strategy
+        strategy_results = {}
         
-        if setup_matplotlib:
-            # We use a consistent prefix based on whether it was a single run or a scaling sweep
-            fname = f"{sweep_mode}_{sanitize_filename(name)}.png"
-            plot_graph(name, results, fname)
+        for tc in sweep_counts:
+            print(f" Running with {tc} Threads...")
+            # Trace only first run of first strategy? Or first run of each?
+            # Let's trace first run of first strategy only to avoid spam
+            trace_this_run = use_tracing and tc == sweep_counts[0] and strategy == selected_strategies[0]
             
+            for res in run_rust_benchmarks(strategy, tc, trace_this_run):
+                strategy_results.setdefault(res['name'], []).append(res)
+        
+        # Generate graphs for this strategy immediately
+        print(f"\n--- Results for {strategy} ---")
+        for name, results in strategy_results.items():
+            if not results: continue
+            config = get_metric_config(name, results[0]['data_points'])
+            print_runs_summary(name, results, config)
+            
+            if setup_matplotlib:
+                # Prefix with strategy name as requested
+                # Format: {strategy}_{name}.png
+                fname = f"{strategy}_{sanitize_filename(name)}.png"
+                plot_graph(f"{name} ({strategy})", results, fname)
+
     if use_tracing:
             print("\n" + "="*60)
             print(" GANTT CHART (CHROME TRACING) GENERATED")
