@@ -3,8 +3,8 @@
 //! This module provides lightweight execution contexts (coroutines) for jobs,
 //! allowing them to yield execution without blocking the OS thread.
 
-use crate::job::Job;
 use crate::allocator::linear::FrameAllocator;
+use crate::job::Job;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 
 use std::cell::UnsafeCell;
@@ -141,8 +141,13 @@ impl Fiber {
         };
 
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper, queue_wrapper) =
-                input
+            if let FiberInput::Start(
+                job,
+                scheduler_ptr,
+                fiber_ptr,
+                allocator_wrapper,
+                queue_wrapper,
+            ) = input
             {
                 // Initialize yielder pointer in the Fiber struct.
                 // SAFETY: fiber_ptr is valid and pinned (Boxed in pool).
@@ -206,8 +211,13 @@ impl Fiber {
         };
 
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper, queue_wrapper) =
-                input
+            if let FiberInput::Start(
+                job,
+                scheduler_ptr,
+                fiber_ptr,
+                allocator_wrapper,
+                queue_wrapper,
+            ) = input
             {
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;

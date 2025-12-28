@@ -5,15 +5,15 @@
 //! fibers (jobs) are multiplexed onto a fixed number of worker threads.
 
 use crate::PinningStrategy;
-use crate::fiber::{FiberInput, FiberState, AllocatorPtr, QueuePtr};
+use crate::allocator::linear::FrameAllocator;
+use crate::fiber::{AllocatorPtr, FiberInput, FiberState, QueuePtr};
 use crate::fiber_pool::FiberPool;
 use crate::job::Job;
-use crate::allocator::linear::FrameAllocator;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use crossbeam::utils::Backoff;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
 /// A worker thread that executes jobs from a queue.
@@ -82,7 +82,7 @@ impl Worker {
 
         // Init backoff outside the loop so it persists across iterations
         let backoff = Backoff::new();
-        
+
         // Track local frame index to detect changes
         let mut local_frame_index = frame_index.load(Ordering::Relaxed);
 
@@ -91,14 +91,16 @@ impl Worker {
             if shutdown.load(Ordering::Relaxed) {
                 break;
             }
-            
+
             // Frame Reset Logic
             let global_frame_index = frame_index.load(Ordering::Relaxed);
             if global_frame_index > local_frame_index {
                 // New frame detected, reset allocator
                 // SAFETY: We assume the user guarantees all jobs from the previous frame are done
                 // before incrementing the frame index.
-                unsafe { allocator.reset(); }
+                unsafe {
+                    allocator.reset();
+                }
                 local_frame_index = global_frame_index;
             }
 
@@ -462,7 +464,7 @@ impl WorkerPool {
             _fiber_pool: fiber_pool,
         }
     }
-    
+
     /// Signals the start of a new frame, triggering allocator resets on workers.
     ///
     /// # Safety

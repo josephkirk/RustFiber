@@ -55,7 +55,7 @@ pub fn run_quicksort_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
 
         let root_job = job_system.run_with_context(move |ctx| {
             let group = Counter::new(num_chunks);
-            
+
             for chunk_idx in 0..num_chunks {
                 let start_idx = chunk_idx * chunk_size;
                 let end_idx = ((chunk_idx + 1) * chunk_size).min(array_size);
@@ -63,11 +63,14 @@ pub fn run_quicksort_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
                 let mut chunk: Vec<i32> = arr[start_idx..end_idx].to_vec();
                 let group_clone = group.clone();
 
-                ctx.spawn_with_counter(move |_| {
-                    sequential_quicksort(&mut chunk);
-                }, group_clone);
+                ctx.spawn_with_counter(
+                    move |_| {
+                        sequential_quicksort(&mut chunk);
+                    },
+                    group_clone,
+                );
             }
-            
+
             ctx.wait_for(&group);
         });
 

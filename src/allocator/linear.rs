@@ -1,4 +1,4 @@
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{Layout, alloc, dealloc};
 use std::ptr::NonNull;
 
 /// A simple linear (bump) allocator for per-frame allocations.
@@ -20,11 +20,11 @@ impl FrameAllocator {
     /// Panics if memory allocation fails.
     pub fn new(capacity: usize) -> Self {
         // Use a default alignment of 16 bytes for the base block to cover most SIMD needs
-        let layout = Layout::from_size_align(capacity, 16)
-            .expect("Invalid layout for FrameAllocator");
-            
+        let layout =
+            Layout::from_size_align(capacity, 16).expect("Invalid layout for FrameAllocator");
+
         let ptr = unsafe { alloc(layout) };
-        
+
         if ptr.is_null() {
             panic!("Failed to allocate backing memory for FrameAllocator");
         }
@@ -42,8 +42,10 @@ impl FrameAllocator {
     pub fn alloc(&mut self, layout: Layout) -> Option<NonNull<u8>> {
         let current_base = unsafe { self.base_ptr.as_ptr().add(self.cursor) };
         let align_offset = current_base.align_offset(layout.align());
-        
-        let new_cursor = self.cursor.checked_add(align_offset)?
+
+        let new_cursor = self
+            .cursor
+            .checked_add(align_offset)?
             .checked_add(layout.size())?;
 
         if new_cursor <= self.capacity {

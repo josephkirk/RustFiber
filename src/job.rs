@@ -3,10 +3,10 @@
 //! Jobs are units of work that can be executed by the fiber system.
 //! They encapsulate a closure and associated counter for tracking completion.
 
+use crate::allocator::linear::FrameAllocator;
 use crate::context::Context;
 use crate::counter::Counter;
 use crate::fiber::FiberHandle;
-use crate::allocator::linear::FrameAllocator;
 use crossbeam::deque::Worker;
 
 // Helper struct to wrap pointers and implement Send
@@ -19,7 +19,6 @@ impl<T> Clone for SendPtr<T> {
     }
 }
 impl<T> Copy for SendPtr<T> {}
-
 
 /// Priority level for job execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -91,17 +90,17 @@ impl Job {
         use std::alloc::Layout;
 
         unsafe fn trampoline<F: FnOnce()>(ptr: *mut u8) {
-            let f = std::ptr::read(ptr as *mut F);
+            let f = unsafe { std::ptr::read(ptr as *mut F) };
             f();
         }
 
         let layout = Layout::new::<F>();
         if let Some(ptr) = allocator.alloc(layout) {
-             let ptr = ptr.as_ptr() as *mut F;
-             unsafe {
-                 std::ptr::write(ptr, work);
-             }
-             Job {
+            let ptr = ptr.as_ptr() as *mut F;
+            unsafe {
+                std::ptr::write(ptr, work);
+            }
+            Job {
                 work: Work::SimpleFrame {
                     func: trampoline::<F>,
                     data: SendPtr(ptr as *mut u8),
@@ -111,29 +110,33 @@ impl Job {
             }
         } else {
             // Fallback to heap allocation
-             Job::new(work)
+            Job::new(work)
         }
     }
 
     /// Creates a new job with an associated counter, allocated in the frame allocator.
-    pub fn with_counter_in_allocator<F>(work: F, counter: Option<Counter>, allocator: &mut FrameAllocator) -> Self
+    pub fn with_counter_in_allocator<F>(
+        work: F,
+        counter: Option<Counter>,
+        allocator: &mut FrameAllocator,
+    ) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
         use std::alloc::Layout;
 
         unsafe fn trampoline<F: FnOnce()>(ptr: *mut u8) {
-            let f = std::ptr::read(ptr as *mut F);
+            let f = unsafe { std::ptr::read(ptr as *mut F) };
             f();
         }
 
         let layout = Layout::new::<F>();
         if let Some(ptr) = allocator.alloc(layout) {
-             let ptr = ptr.as_ptr() as *mut F;
-             unsafe {
-                 std::ptr::write(ptr, work);
-             }
-             Job {
+            let ptr = ptr.as_ptr() as *mut F;
+            unsafe {
+                std::ptr::write(ptr, work);
+            }
+            Job {
                 work: Work::SimpleFrame {
                     func: trampoline::<F>,
                     data: SendPtr(ptr as *mut u8),
@@ -142,10 +145,10 @@ impl Job {
                 priority: JobPriority::Normal,
             }
         } else {
-             match counter {
-                 Some(c) => Job::with_counter(work, c),
-                 None => Job::new(work),
-             }
+            match counter {
+                Some(c) => Job::with_counter(work, c),
+                None => Job::new(work),
+            }
         }
     }
 
@@ -208,19 +211,19 @@ impl Job {
         use std::alloc::Layout;
 
         unsafe fn trampoline<F: FnOnce(&Context)>(ptr: *mut u8, ctx: &Context) {
-            let f = std::ptr::read(ptr as *mut F);
+            let f = unsafe { std::ptr::read(ptr as *mut F) };
             f(ctx);
         }
-        
+
         // Ensure proper alignment for F and pointer storage
         let layout = Layout::new::<F>();
-        
+
         if let Some(ptr) = allocator.alloc(layout) {
-             let ptr = ptr.as_ptr() as *mut F;
-             unsafe {
-                 std::ptr::write(ptr, work);
-             }
-             Job {
+            let ptr = ptr.as_ptr() as *mut F;
+            unsafe {
+                std::ptr::write(ptr, work);
+            }
+            Job {
                 work: Work::WithContextFrame {
                     func: trampoline::<F>,
                     data: SendPtr(ptr as *mut u8),
@@ -230,7 +233,7 @@ impl Job {
                 priority: JobPriority::Normal,
             }
         } else {
-             Job::with_counter_and_context(work, counter, job_system_ptr)
+            Job::with_counter_and_context(work, counter, job_system_ptr)
         }
     }
 
@@ -279,18 +282,18 @@ impl Job {
                     work(&context);
                 }
             }
-            Work::SimpleFrame { func, data } => {
-                unsafe {
-                    (func)(data.0);
-                }
-            }
-            Work::WithContextFrame { func, data, job_system_ptr } => {
-                 unsafe {
-                    let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
-                    let context = Context::new(job_system, allocator, queue);
-                    (func)(data.0, &context);
-                }
-            }
+            Work::SimpleFrame { func, data } => unsafe {
+                (func)(data.0);
+            },
+            Work::WithContextFrame {
+                func,
+                data,
+                job_system_ptr,
+            } => unsafe {
+                let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
+                let context = Context::new(job_system, allocator, queue);
+                (func)(data.0, &context);
+            },
             Work::Resume(_) => {
                 panic!("Cannot execute a Resume job directly. Must be handled by worker loop.");
             }

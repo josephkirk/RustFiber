@@ -1,6 +1,6 @@
 use rustfiber::JobSystem;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
 fn test_frame_allocation_lifecycle() {
@@ -15,15 +15,15 @@ fn test_frame_allocation_lifecycle() {
             c.fetch_add(1, Ordering::SeqCst);
         });
     });
-    
+
     system.wait_for_counter(&jobs_done);
     assert_eq!(counter_val.load(Ordering::SeqCst), 1);
-    
+
     // Start new frame (reset allocators)
     // NOTE: In a real engine this is called after ensuring all frame jobs are done.
     // We simulated that with wait_for_counter above.
     system.start_new_frame();
-    
+
     // Run again to ensure allocator reset worked and didn't crash
     let c2 = counter_val.clone();
     let jobs_done2 = system.run_with_context(move |ctx| {
@@ -35,9 +35,9 @@ fn test_frame_allocation_lifecycle() {
             });
         }
     });
-    
+
     system.wait_for_counter(&jobs_done2);
     assert_eq!(counter_val.load(Ordering::SeqCst), 11);
-    
+
     system.shutdown().unwrap();
 }

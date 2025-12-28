@@ -65,9 +65,9 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
                 });
             }
         });
-        
+
         job_system.wait_for_counter(&root_job);
-        
+
         // Wait for all detached jobs to complete
         while counter.load(Ordering::SeqCst) < num_tasks {
             std::thread::yield_now();

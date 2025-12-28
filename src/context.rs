@@ -1,10 +1,10 @@
 //! Context type for safe access to job system capabilities from within jobs.
 
+use crate::allocator::linear::FrameAllocator;
 use crate::counter::Counter;
 use crate::fiber::Fiber;
-use crate::job_system::JobSystem;
-use crate::allocator::linear::FrameAllocator;
 use crate::job::{Job, SendPtr};
+use crate::job_system::JobSystem;
 use crossbeam::deque::Worker;
 
 /// Context provided to jobs for accessing fiber system capabilities.
@@ -22,7 +22,7 @@ impl<'a> Context<'a> {
     ) -> Self {
         Context {
             job_system,
-            allocator: allocator.map(|p| SendPtr(p)),
+            allocator: allocator.map(SendPtr),
             local_queue: local_queue.map(|p| SendPtr(p as *mut _)),
         }
     }
@@ -66,13 +66,13 @@ impl<'a> Context<'a> {
             unsafe {
                 let alloc = &mut *alloc_ptr.0;
                 let job_system_ptr = self.job_system as *const _ as usize;
-                
+
                 // Use generic internal method we implemented on Job
                 crate::job::Job::with_counter_and_context_in_allocator(
-                    work, 
-                    counter, 
-                    alloc, 
-                    job_system_ptr
+                    work,
+                    counter,
+                    alloc,
+                    job_system_ptr,
                 )
             }
         } else {

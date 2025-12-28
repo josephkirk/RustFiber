@@ -1,14 +1,13 @@
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo};
-use rustfiber::{JobSystem, PinningStrategy};
 use crossbeam::queue::SegQueue;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use rustfiber::{JobSystem, PinningStrategy};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// Benchmark for Producer-Consumer pattern using a lock-free queue.
 /// This tests the pure throughput of the job system and fiber switching
 /// without being bottlenecked by global mutex contention.
-
 pub fn run_producer_consumer_benchmark(
     strategy: PinningStrategy,
     threads: usize,
