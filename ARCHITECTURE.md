@@ -56,7 +56,9 @@ We use a **Chase-Lev Work-Stealing Deque** (via `crossbeam-deque`).
 Allocating new stacks for every fiber is prohibitive (`mmap` syscalls).
 - **Solution**: We implemented `DefaultStack` reuse in `FiberPool`.
 - **Mechanism**: When a fiber completes, its stack is reset (rewind stack pointer) rather than deallocated. This reduced fiber allocation cost to near-zero.
-- **Impact**: Removing allocation overhead was critical to achieving >6M jobs/sec.
+- **Machine Cost**: Pre-allocating fibers incurs a fixed startup latency (~4-5ms for 16 threads) and virtual memory reservation (~1GB).
+- **Benefit**: This "Warmup Cost" guarantees no allocation glitches during runtime execution, which is critical for consistent game frame times.
+- **Reference**: See [Startup Analysis](docs/startup_analysis.md) for details.
 
 ### 4.2 Intelligent Backoff & SMT Mitigation
 Efficiently handling idle states is crucial for both power and performance (especially on SMT/Hyperthreading).

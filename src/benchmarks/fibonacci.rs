@@ -29,6 +29,14 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
 
     let job_system = JobSystem::new_with_strategy(threads, strategy);
 
+    // Warmup: Ensure all threads are started and have allocated local resources
+    eprintln!("Warming up workers...");
+    let warmup_jobs: Vec<Box<dyn FnOnce() + Send>> = (0..threads * 4)
+        .map(|_| Box::new(|| {}) as Box<dyn FnOnce() + Send>)
+        .collect();
+    let counter = job_system.run_multiple(warmup_jobs);
+    job_system.wait_for_counter(&counter);
+
     let test_sizes = vec![
         1_000, 5_000, 10_000, 50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000, 1_250_000,
         1_500_000,
@@ -61,7 +69,7 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
                 ctx.spawn_detached(move |_| {
                     // Calculate fibonacci(20) for consistent small workload
                     let _ = fibonacci(20);
-                    c_inner.fetch_add(1, Ordering::SeqCst);
+                    c_inner.fetch_add(1, Ordering::Relaxed);
                 });
             }
         });
@@ -69,7 +77,7 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
         job_system.wait_for_counter(&root_job);
 
         // Wait for all detached jobs to complete
-        while counter.load(Ordering::SeqCst) < num_tasks {
+        while counter.load(Ordering::Relaxed) < num_tasks {
             std::thread::yield_now();
         }
 

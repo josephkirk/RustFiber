@@ -111,6 +111,13 @@ The "Batching" benchmark tests the `parallel_for_chunked` API.
 *   **Optimization**: Critically, it allows **Batch-Local Accumulation**, reducing atomic synchronization from 1,000,000 ops to just ~128 ops.
 *   **Result**: Linear scaling up to memory bandwidth limits (>1B items/sec effective throughput).
 
+## Understanding Startup Latency
+Users may observe a fixed **~4-5ms** overhead at the start of benchmarks (especially linear ones).
+- **Cause**: "First-Touch" initialization where `FiberPool` pre-allocates stacks (64MB/thread).
+- **Interpretation**: This is **not runtime overhead**. It is a one-time startup cost.
+- **Verification**: Benchmarks include a "Warmup" phase to separate this initialization from the actual performance metrics.
+- See [Startup Analysis](docs/startup_analysis.md) for a full breakdown.
+
 ## Requirements
 
 - Rust (for building the benchmark binary)

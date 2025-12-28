@@ -121,6 +121,12 @@ Typical performance on modern multi-core systems:
 - 6+ million jobs/second throughput
 - Sub-microsecond latency for simple jobs
 - Efficient CPU utilization across all cores
+- **Startup Latency**: ~5ms (fixed) due to fiber stack pre-allocation.
+    - *Note*: This is intentional to prevent runtime allocation glitches in game engines.
+    - CLI tools can reduce `initial_pool_size` for faster startup.
+
+## Startup Analysis
+For a deep dive into the initialization costs versus runtime performance, see [Startup Analysis](docs/startup_analysis.md).
 
 ## License
 
