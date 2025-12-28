@@ -19,7 +19,7 @@ use std::thread::{self, JoinHandle};
 
 // Thread-Local Storage for the worker's FrameAllocator
 thread_local! {
-    static ACTIVE_ALLOCATOR: Cell<Option<*mut FrameAllocator>> = Cell::new(None);
+    static ACTIVE_ALLOCATOR: Cell<Option<*mut FrameAllocator>> = const { Cell::new(None) };
 }
 
 /// Helper to temporarily expose the allocator via TLS
@@ -49,12 +49,7 @@ where
     F: FnOnce(&mut FrameAllocator) -> R,
 {
     ACTIVE_ALLOCATOR.with(|tls| {
-        if let Some(ptr) = tls.get() {
-            // SAFETY: See get_current_allocator.
-            unsafe { Some(f(&mut *ptr)) }
-        } else {
-            None
-        }
+        tls.get().map(|ptr| unsafe { f(&mut *ptr) })
     })
 }
 
@@ -130,7 +125,7 @@ impl Worker {
 
         // Initialize FrameAllocator on the thread (First-Touch)
         let mut allocator = FrameAllocator::new(fiber_config.frame_stack_size);
-        
+
         // SAFETY: Allocator lives as long as the function (and this scope).
         // Access via TLS is strictly local to this thread.
         let _scope = unsafe { ScopedAllocator::new(&mut allocator as *mut _) };

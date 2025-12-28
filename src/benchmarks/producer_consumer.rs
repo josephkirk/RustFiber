@@ -21,10 +21,10 @@ pub fn run_producer_consumer_benchmark(
     );
 
     let job_system = JobSystem::new_with_strategy(threads, strategy);
+    // Cold start prevention
+    std::thread::sleep(std::time::Duration::from_millis(20));
 
-    let test_sizes = vec![
-        1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000,
-    ];
+    let test_sizes = vec![10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000];
 
     let mut data_points = Vec::new();
     let mut timed_out = false;

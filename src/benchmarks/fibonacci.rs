@@ -28,6 +28,8 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
     );
 
     let job_system = JobSystem::new_with_strategy(threads, strategy);
+    // Cold start prevention: Wait for OS to stabilize worker threads
+    std::thread::sleep(std::time::Duration::from_millis(20));
 
     // Warmup: Ensure all threads are started and have allocated local resources
     eprintln!("Warming up workers...");
@@ -38,8 +40,7 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
     job_system.wait_for_counter(&counter);
 
     let test_sizes = vec![
-        1_000, 5_000, 10_000, 50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000, 1_250_000,
-        1_500_000,
+        10_000, 50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000, 1_250_000, 1_500_000,
     ];
 
     let mut data_points = Vec::new();

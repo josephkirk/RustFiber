@@ -90,7 +90,7 @@ impl Job {
             // *in the same call stack* (e.g. inside `allocator.alloc(...)` which is impossible).
             unsafe {
                 let allocator = &mut *alloc_ptr;
-                
+
                 unsafe fn trampoline<F: FnOnce()>(ptr: *mut u8) {
                     let f = unsafe { std::ptr::read(ptr as *mut F) };
                     f();
@@ -99,10 +99,10 @@ impl Job {
                 let layout = Layout::new::<F>();
                 // Attempt allocation. If it fails (returns None), we fall through to heap allocation.
                 if let Some(ptr) = allocator.alloc(layout) {
-                     let ptr = ptr.as_ptr() as *mut F;
-                     std::ptr::write(ptr, work);
-                     
-                     return Job {
+                    let ptr = ptr.as_ptr() as *mut F;
+                    std::ptr::write(ptr, work);
+
+                    return Job {
                         work: Work::SimpleFrame {
                             func: trampoline::<F>,
                             data: SendPtr(ptr as *mut u8),

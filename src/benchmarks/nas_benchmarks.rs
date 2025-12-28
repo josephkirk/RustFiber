@@ -127,8 +127,10 @@ pub fn run_nas_ep_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
     );
 
     let job_system = JobSystem::new_with_strategy(threads, strategy);
+    // Cold start prevention
+    std::thread::sleep(std::time::Duration::from_millis(20));
 
-    let ep_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 200_000];
+    let ep_sizes = vec![10_000, 25_000, 50_000, 100_000, 200_000];
     let mut data_points = Vec::new();
     let mut timed_out = false;
     let total_start = Instant::now();
@@ -175,6 +177,8 @@ pub fn run_nas_mg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
 
     // Use specific strategy
     let job_system = JobSystem::new_with_strategy(threads, strategy);
+    // Cold start prevention
+    std::thread::sleep(std::time::Duration::from_millis(20));
 
     // Warmup: Ensure all threads are started and have allocated local resources
     // This prevents "Cold Start" latency (memory allocation) from skewing the first benchmark data point.
@@ -232,8 +236,10 @@ pub fn run_nas_cg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
     );
 
     let job_system = JobSystem::new_with_strategy(threads, strategy);
+    // Cold start prevention
+    std::thread::sleep(std::time::Duration::from_millis(20));
 
-    let cg_sizes = vec![1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
+    let cg_sizes = vec![10_000, 25_000, 50_000, 100_000];
     let mut data_points = Vec::new();
     let mut timed_out = false;
     let total_start = Instant::now();

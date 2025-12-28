@@ -1,10 +1,10 @@
+pub mod allocation;
 pub mod batching_benchmark;
 pub mod fibonacci;
 pub mod nas_benchmarks;
 pub mod producer_consumer;
 pub mod quicksort;
 pub mod utils;
-pub mod allocation;
 
 use fibonacci::run_fibonacci_benchmark;
 use nas_benchmarks::{run_nas_cg_benchmark, run_nas_ep_benchmark, run_nas_mg_benchmark};
