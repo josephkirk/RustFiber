@@ -8,14 +8,16 @@ pub struct FiberPool {
     // Fibers must be pinned/stable pointers as they contain self-referential WaitNodes
     pool: Vec<Box<Fiber>>,
     stack_size: usize,
+    prefetch_pages: bool,
 }
 
 impl FiberPool {
     /// Creates a new fiber pool with pre-allocated fibers.
-    pub fn new(initial_count: usize, stack_size: usize) -> Self {
+    pub fn new(initial_count: usize, stack_size: usize, prefetch_pages: bool) -> Self {
         let mut pool = FiberPool {
             pool: Vec::with_capacity(initial_count),
             stack_size,
+            prefetch_pages,
         };
         pool.grow(initial_count);
         pool
@@ -26,17 +28,18 @@ impl FiberPool {
     /// rather than taking a massive stall at startup.
     pub fn grow(&mut self, count: usize) {
         for _ in 0..count {
-            self.pool.push(Box::new(Fiber::new(self.stack_size)));
+            self.pool
+                .push(Box::new(Fiber::new(self.stack_size, self.prefetch_pages)));
         }
     }
 
     /// Retrieves a fiber from the pool or creates a new one if empty.
     pub fn get(&mut self) -> Box<Fiber> {
         if let Some(mut fiber) = self.pool.pop() {
-            fiber.reset(self.stack_size);
+            fiber.reset(self.stack_size, self.prefetch_pages);
             fiber
         } else {
-            Box::new(Fiber::new(self.stack_size))
+            Box::new(Fiber::new(self.stack_size, self.prefetch_pages))
         }
     }
 

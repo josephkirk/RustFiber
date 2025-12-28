@@ -130,8 +130,11 @@ impl Worker {
 
         // Initialize FiberPool on the thread (First-Touch)
         // Initialize FiberPool on the thread (First-Touch)
-        let mut fiber_pool =
-            FiberPool::new(fiber_config.initial_pool_size, fiber_config.stack_size);
+        let mut fiber_pool = FiberPool::new(
+            fiber_config.initial_pool_size,
+            fiber_config.stack_size,
+            fiber_config.prefetch_pages,
+        );
 
         // Compute Steal Order based on Topology
         // 1. Siblings (Same NUMA Node)

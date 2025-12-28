@@ -4,6 +4,7 @@ pub mod fibonacci;
 pub mod nas_benchmarks;
 pub mod producer_consumer;
 pub mod quicksort;
+pub mod startup_latency;
 pub mod utils;
 
 use rustfiber::PinningStrategy;
@@ -59,6 +60,7 @@ fn main() {
     eprintln!("=======================================================");
 
     let runs: Vec<fn(&rustfiber::JobSystem, PinningStrategy, usize) -> utils::BenchmarkResult> = vec![
+        startup_latency::run_startup_latency_benchmark,
         fibonacci::run_fibonacci_benchmark,
         quicksort::run_quicksort_benchmark,
         producer_consumer::run_producer_consumer_benchmark,

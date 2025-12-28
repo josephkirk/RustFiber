@@ -22,6 +22,9 @@ pub struct FiberConfig {
     pub target_pool_size: usize,
     /// Size of the per-worker frame allocator in bytes. Default: 1MB.
     pub frame_stack_size: usize,
+    /// Whether to prefetch stack pages for NUMA locality. Default: false.
+    /// Currently disabled due to Windows compatibility issues.
+    pub prefetch_pages: bool,
 }
 
 impl Default for FiberConfig {
@@ -31,6 +34,7 @@ impl Default for FiberConfig {
             initial_pool_size: 16, // Reduced for fast startup (NUMA-friendly)
             target_pool_size: 128, // Workers will grow to this size in background
             frame_stack_size: 1024 * 1024,
+            prefetch_pages: false, // Disabled due to Windows compatibility issues
         }
     }
 }

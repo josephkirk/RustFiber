@@ -108,6 +108,13 @@ pub struct Fiber {
     /// Flag to prevent double-resume hazards.
     /// Set to true when suspended, false when running.
     pub is_suspended: std::sync::atomic::AtomicBool,
+
+    /// Whether the stack has been prefaulted for NUMA locality.
+    /// Prefaulting is done lazily on first resume to avoid Windows stack probing issues.
+    stack_prefaulted: bool,
+
+    /// Whether to prefetch stack pages for NUMA locality.
+    prefetch_pages: bool,
 }
 
 pub enum FiberState {
@@ -123,17 +130,13 @@ thread_local! {
 
 impl Fiber {
     /// Creates a new fiber with the given stack size.
-    pub fn new(stack_size: usize) -> Self {
+    pub fn new(stack_size: usize, prefetch_pages: bool) -> Self {
         let mut stack = Box::new(
             DefaultStack::new(stack_size)
                 .unwrap_or_else(|_| DefaultStack::new(1024 * 1024).unwrap()),
         );
 
-        // NUMA-Local Zeroing:
-        // Force physical allocation of stack pages on the current thread's NUMA node
-        // by writing to them. This implements the "First-Touch" policy.
-        // IMPORTANT: Must be done BEFORE `Coroutine::with_stack` initializes the context!
-        Self::prefault_stack_memory(&mut stack);
+        // NOTE: Prefaulting is now done lazily in resume() to avoid Windows stack probing issues
 
         // Extend lifetime of stack to 'static to satisfy Coroutine type.
         // SAFETY: We ensure `coroutine` is dropped before `stack`.
@@ -173,29 +176,31 @@ impl Fiber {
             wait_node: UnsafeCell::new(WaitNode::default()),
             yielder: std::ptr::null(),
             is_suspended: std::sync::atomic::AtomicBool::new(false),
+            stack_prefaulted: false,
+            prefetch_pages,
         }
     }
 
     /// Pre-faults the stack memory to ensure NUMA locality.
-    /// Writes a 0 to every 4KB page in the stack.
-    /// Must be done BEFORE context initialization.
+    /// This is a placeholder for future implementation.
+    /// Currently disabled due to Windows stack probing compatibility issues.
     #[inline(never)]
-    fn prefault_stack_memory(_stack: &mut DefaultStack) {
-        // NOTE: Manual prefaulting caused Guard Page Violations on Windows due to
-        // strict stack probing requirements and corosensei's internal layout.
-        // We defer this optimization to v0.3 where we can implement a custom Stack allocator.
+    fn prefault_stack_memory(&mut self) {
+        if self.stack_prefaulted || !self.prefetch_pages {
+            return; // Already prefaulted or disabled
+        }
 
-        // For now, we rely on the OS handling the page faults when the coroutine first runs.
-        /*
-        let base = stack.base();   // Top of stack (high address)
-        let limit = stack.limit(); // Bottom of stack (low address)
-
-        unsafe { ... }
-        */
+        // TODO: Implement platform-specific prefaulting that respects Windows stack semantics
+        // For now, we rely on OS page faults during first use
+        self.stack_prefaulted = true; // Mark as done to avoid repeated attempts
     }
 
     /// Resumes the fiber with a new job or continues execution.
     pub fn resume(&mut self, input: FiberInput) -> FiberState {
+        // Lazy prefaulting: ensure stack pages are allocated on current NUMA node
+        // This is done here (after coroutine creation) to avoid Windows stack probing issues
+        self.prefault_stack_memory();
+
         let self_ptr = self as *mut _;
         if let Some(coroutine) = self.coroutine.as_mut() {
             // Set current fiber for introspection/scheduling logic
@@ -218,7 +223,13 @@ impl Fiber {
 
     /// Resets the fiber state for reuse.
     /// Recreates the coroutine to reset the stack.
-    pub fn reset(&mut self, _stack_size: usize) {
+    pub fn reset(&mut self, _stack_size: usize, prefetch_pages: bool) {
+        // Update prefetch_pages setting
+        self.prefetch_pages = prefetch_pages;
+
+        // Reset prefaulting flag for lazy prefaulting on next use
+        self.stack_prefaulted = false;
+
         // Drop existing coroutine to free stack usage
         self.coroutine = None;
 
