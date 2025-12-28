@@ -179,9 +179,10 @@ pub fn run_nas_mg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
     // Warmup: Ensure all threads are started and have allocated local resources
     // This prevents "Cold Start" latency (memory allocation) from skewing the first benchmark data point.
     eprintln!("Warming up workers...");
-    let warmup_jobs: Vec<Box<dyn FnOnce() + Send>> = (0..threads * 4) // submit enough to wake everyone
-        .map(|_| Box::new(|| {}) as Box<dyn FnOnce() + Send>)
-        .collect();
+    let warmup_jobs: Vec<Box<dyn FnOnce() + Send>> =
+        (0..threads * 4) // submit enough to wake everyone
+            .map(|_| Box::new(|| {}) as Box<dyn FnOnce() + Send>)
+            .collect();
     let counter = job_system.run_multiple(warmup_jobs);
     job_system.wait_for_counter(&counter);
 

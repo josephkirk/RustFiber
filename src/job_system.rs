@@ -28,8 +28,8 @@ impl Default for FiberConfig {
     fn default() -> Self {
         Self {
             stack_size: 512 * 1024,
-            initial_pool_size: 16,  // Reduced for fast startup (NUMA-friendly)
-            target_pool_size: 128,  // Workers will grow to this size in background
+            initial_pool_size: 16, // Reduced for fast startup (NUMA-friendly)
+            target_pool_size: 128, // Workers will grow to this size in background
             frame_stack_size: 1024 * 1024,
         }
     }

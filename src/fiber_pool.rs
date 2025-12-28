@@ -4,6 +4,8 @@ use crate::fiber::Fiber;
 /// A pool of reusable fibers to minimize stack allocation overhead.
 /// Note: This pool is designed to be Thread-Local (used by a single Worker).
 pub struct FiberPool {
+    #[allow(clippy::vec_box)]
+    // Fibers must be pinned/stable pointers as they contain self-referential WaitNodes
     pool: Vec<Box<Fiber>>,
     stack_size: usize,
 }
@@ -46,5 +48,10 @@ impl FiberPool {
     /// Returns the current number of fibers in the pool.
     pub fn len(&self) -> usize {
         self.pool.len()
+    }
+
+    /// Returns true if the pool is empty.
+    pub fn is_empty(&self) -> bool {
+        self.pool.is_empty()
     }
 }

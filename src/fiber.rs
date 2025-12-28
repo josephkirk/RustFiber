@@ -172,34 +172,32 @@ impl Fiber {
             }
         });
 
-        let mut fiber = Fiber {
+        Fiber {
             coroutine: Some(coroutine),
             stack,
             wait_node: UnsafeCell::new(WaitNode::default()),
             yielder: std::ptr::null(),
             is_suspended: std::sync::atomic::AtomicBool::new(false),
-        };
+        }
+    }
 
-    fiber
-}
+    /// Pre-faults the stack memory to ensure NUMA locality.
+    /// Writes a 0 to every 4KB page in the stack.
+    /// Must be done BEFORE context initialization.
+    #[inline(never)]
+    fn prefault_stack_memory(_stack: &mut DefaultStack) {
+        // NOTE: Manual prefaulting caused Guard Page Violations on Windows due to
+        // strict stack probing requirements and corosensei's internal layout.
+        // We defer this optimization to v0.3 where we can implement a custom Stack allocator.
 
-/// Pre-faults the stack memory to ensure NUMA locality.
-/// Writes a 0 to every 4KB page in the stack.
-/// Must be done BEFORE context initialization.
-#[inline(never)]
-fn prefault_stack_memory(stack: &mut DefaultStack) {
-    // NOTE: Manual prefaulting caused Guard Page Violations on Windows due to
-    // strict stack probing requirements and corosensei's internal layout.
-    // We defer this optimization to v0.3 where we can implement a custom Stack allocator.
-    
-    // For now, we rely on the OS handling the page faults when the coroutine first runs.
-    /*
-    let base = stack.base();   // Top of stack (high address)
-    let limit = stack.limit(); // Bottom of stack (low address)
-    
-    unsafe { ... }
-    */
-}
+        // For now, we rely on the OS handling the page faults when the coroutine first runs.
+        /*
+        let base = stack.base();   // Top of stack (high address)
+        let limit = stack.limit(); // Bottom of stack (low address)
+
+        unsafe { ... }
+        */
+    }
 
     /// Resumes the fiber with a new job or continues execution.
     pub fn resume(&mut self, input: FiberInput) -> FiberState {

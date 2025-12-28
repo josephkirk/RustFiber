@@ -83,16 +83,17 @@ impl Worker {
 
         // Initialize FrameAllocator on the thread (First-Touch)
         let mut allocator = FrameAllocator::new(fiber_config.frame_stack_size);
-        
+
         // Initialize FiberPool on the thread (First-Touch)
         // Initialize FiberPool on the thread (First-Touch)
-        let mut fiber_pool = FiberPool::new(fiber_config.initial_pool_size, fiber_config.stack_size);
+        let mut fiber_pool =
+            FiberPool::new(fiber_config.initial_pool_size, fiber_config.stack_size);
 
         // Compute Steal Order based on Topology
         // 1. Siblings (Same NUMA Node)
         // 2. Others (Remote NUMA Nodes)
         let mut steal_order = Vec::new();
-        
+
         // Add siblings first
         if let Some(siblings) = topology.get_siblings(worker_id) {
             for &sibling_id in siblings {
@@ -101,7 +102,7 @@ impl Worker {
                 }
             }
         }
-        
+
         // Add remaining workers
         for i in 0..stealers.len() {
             if i != worker_id && !steal_order.contains(&i) {
@@ -504,7 +505,7 @@ impl WorkerPool {
                 // Pass config to allow local creation (and only use per-worker limit, not total * num_threads)
                 // Wait, previous code multiplied: config.initial_pool_size * num_threads.
                 // Now each worker gets config.initial_pool_size. This matches.
-                fiber_config: config.clone(), 
+                fiber_config: config.clone(),
                 frame_index: Arc::clone(&frame_index),
                 topology: Arc::clone(&topology),
             }));
