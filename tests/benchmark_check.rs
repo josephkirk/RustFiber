@@ -26,27 +26,7 @@ fn benchmark_heap_vs_frame() {
     );
 
     // 2. Frame Allocation (nested)
-    // We spawn ONE root job, which spawns `count` children using ctx.spawn_job (Frame Alloc)
-    let start_frame = Instant::now();
-    let root = system.run_with_context(move |ctx| {
-        for _ in 0..count {
-            // ctx.spawn_job uses FrameAllocator because root job runs on worker
-            let _ = ctx.spawn_job(|_| {});
-        }
-    });
-    system.wait_for_counter(&root); // This waits for children? 
-    // Wait, ctx.spawn_job returns a counter. We didn't wait for them!
-    // But `root` counter only tracks the root job itself.
-    // The root job finishes after spawning.
-    // The children might still be running.
-    // To measure throughput, we need to wait for children.
-    // We can't wait for 50k counters easily in the loop (it would serialize them).
-    // We can use a shared atomic to track completions?
-
-    // Better: use `spawn_jobs` batch? spawning individually is what we want to test (alloc overhead).
-
     // Let's use atomic counter.
-
     let done_count = Arc::new(AtomicUsize::new(0));
     let c = done_count.clone();
 

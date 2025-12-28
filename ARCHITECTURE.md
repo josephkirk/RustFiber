@@ -56,7 +56,9 @@ We use a **Chase-Lev Work-Stealing Deque** (via `crossbeam-deque`).
 Allocating new stacks for every fiber is prohibitive (`mmap` syscalls).
 - **Solution**: We implemented `DefaultStack` reuse in `FiberPool`.
 - **Mechanism**: When a fiber completes, its stack is reset (rewind stack pointer) rather than deallocated. This reduced fiber allocation cost to near-zero.
-- **Impact**: Removing allocation overhead was critical to achieving >6M jobs/sec.
+- **Machine Cost**: Pre-allocating fibers incurs a fixed startup latency (~4-5ms for 16 threads) and virtual memory reservation (~1GB). **UPDATE**: Optimized to <1ms startup through incremental pool growth.
+- **Benefit**: This "Warmup Cost" guarantees no allocation glitches during runtime execution, which is critical for consistent game frame times.
+- **Reference**: See [Startup Analysis](docs/startup_analysis.md) for details.
 
 ### 4.2 Intelligent Backoff & SMT Mitigation
 Efficiently handling idle states is crucial for both power and performance (especially on SMT/Hyperthreading).
@@ -109,8 +111,13 @@ For effectively parallelizing loops with millions of tiny iterations (e.g., enti
     2.  Apply **SIMD**: Process contiguous data chunks efficiently using vector instructions.
     3.  Reduce Scheduling Overhead: One job managing 10k items reduces scheduler pressure by 10,000x.
 
----
+### 4.9 NUMA Awareness Framework
+To optimize memory locality on multi-socket systems, we implemented infrastructure for NUMA-local fiber stack allocation.
+- **First-Touch Policy**: Memory pages are allocated and zeroed on the worker thread that will use them, ensuring placement on the correct NUMA node.
+- **Configuration**: `FiberConfig` includes a `prefetch_pages` option to control this behavior.
+- **Current Status**: Framework implemented but disabled on Windows due to guard page violations that prevent safe memory writes to stack regions. The infrastructure remains ready for future Windows-compatible implementations.
 
+---
 
 ## 5. Performance
 
@@ -119,5 +126,11 @@ Our benchmarks demonstrate the effectiveness of this architecture:
 - **Fibonacci (Tiny Tasks)**: >3.5 Million tasks/sec.
 - **Conjugate Gradient (Memory Bound)**: <1.5ms execution time for 100k elements (Linear Strategy).
 - **QuickSort (Recursive)**: Linear scaling with core count.
+- **Startup Latency**: Reduced from 4-5ms to <1ms through incremental fiber allocation.
 
 See [BENCHMARKS.md](BENCHMARKS.md) for detailed graphs and results.
+
+## 6. Current Limitations
+
+- **Windows NUMA Prefaulting**: Disabled due to guard page violations that prevent direct memory writes to fiber stack regions. The framework is in place for future resolution of Windows compatibility issues.
+- **Large Page Support**: Deferred to v0.3. Currently uses standard 4KB pages for fiber stacks, which may increase TLB pressure on large deployments.

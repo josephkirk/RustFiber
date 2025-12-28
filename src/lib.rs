@@ -134,6 +134,7 @@ pub mod fiber;
 pub mod fiber_pool;
 pub mod job;
 pub mod job_system;
+pub mod topology;
 pub mod worker;
 
 use serde::{Deserialize, Serialize};

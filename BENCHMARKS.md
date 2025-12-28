@@ -11,6 +11,8 @@ This directory contains benchmark scripts that test the RustFiber job system wit
    - EP (Embarrassingly Parallel) - Pure throughput with zero communication
    - MG (Multi-Grid) - Communication and memory bandwidth
    - CG (Conjugate Gradient) - Irregular memory access patterns
+5. **Allocation Throughput** - Baseline test of the `FrameAllocator` and `Job::new` logic, measuring raw per-task allocation cost (~10ns/job).
+6. **Startup Latency** - Measures job system initialization time across different fiber configurations, validating the incremental allocation optimization that reduced startup from 4-5ms to <1ms.
 
 ## Running Benchmarks
 
@@ -81,9 +83,9 @@ These graphs show how performance scales from 1 to 32 cores.
 |--------|--------|
 | ![NAS MG Cores](docs/comparison_cores_benchmark_4b_nas_mg_multi-grid.png) | ![NAS CG Cores](docs/comparison_cores_benchmark_4c_nas_cg_conjugate_gradient.png) |
 
-| Batching (Parallel For) |
-|-------------------------|
-| ![Batching Cores](docs/comparison_cores_batching_parallel_for_auto.png) |
+| Batching (Parallel For) | Allocation Throughput |
+|-------------------------|-----------------------|
+| ![Batching Cores](docs/comparison_cores_batching_parallel_for_auto.png) | ![Allocation Cores](docs/comparison_cores_allocation_throughput.png) |
 
 ### Strategy Efficiency Comparison (32 Cores)
 These graphs compare different pinning strategies on a multi-core system.
@@ -100,9 +102,16 @@ These graphs compare different pinning strategies on a multi-core system.
 |--------|--------|
 | ![NAS MG Strategies](docs/comparison_strategies_benchmark_4b_nas_mg_multi-grid.png) | ![NAS CG Strategies](docs/comparison_strategies_benchmark_4c_nas_cg_conjugate_gradient.png) |
 
-| Batching (Parallel For) |
-|-------------------------|
-| ![Batching Strategies](docs/comparison_strategies_batching_parallel_for_auto.png) |
+| Batching (Parallel For) | Allocation Throughput |
+|-------------------------|-----------------------|
+| ![Batching Strategies](docs/comparison_strategies_batching_parallel_for_auto.png) | ![Allocation Strategies](docs/comparison_strategies_allocation_throughput.png) |
+
+## Scaling Analysis (ns/task)
+RustFiber now uses **Nanoseconds per Task/Item** as its primary performance metric for most benchmarks. 
+
+*   **O(1) Visualization**: A perfectly horizontal line on these graphs indicates that the work system has zero scaling overhead—the cost of a millionth task is identical to the first.
+*   **Zero-Based Y-Axis**: All scaling graphs are forced to start at `0ns`. This provides a non-deceptive view of whether the system overhead is small relative to the work.
+*   **Amortized Overhead**: Small task sizes (1,000 and 5,000) are excluded from the results. At these scales, constant overheads like root job submission dominate the metric, creating $1/n$ noise that obscures the actual runtime efficiency.
 
 ## Batching (Parallel For) Performance
 The "Batching" benchmark tests the `parallel_for_chunked` API.
@@ -110,6 +119,21 @@ The "Batching" benchmark tests the `parallel_for_chunked` API.
 *   **With Batching (Chunked)**: Work is split into ~128 large chunks (4x core count).
 *   **Optimization**: Critically, it allows **Batch-Local Accumulation**, reducing atomic synchronization from 1,000,000 ops to just ~128 ops.
 *   **Result**: Linear scaling up to memory bandwidth limits (>1B items/sec effective throughput).
+
+## Warmup & Cold-Start Prevention
+To ensure measurements reflect the high-frequency steady state of the job system, the following optimizations are applied:
+
+- **OS Settle Period**: Each benchmark waits **20ms** after initializing the `JobSystem`. This allows worker threads, core affinity masks, and CPU frequency scaling to stabilize.
+- **Substantial Warmup**: A massive parallel task (e.g., 100,000 items) is executed before recording. This primes the `FrameAllocator` arenas and wakes up all worker fibers.
+- **Worker-Local Measurement**: Benchmarks like "Allocation Throughput" measure the **inner worker loop duration** directly via atomics, ensuring high-level scheduling overhead does not skew the raw per-task performance data.
+
+## Startup Latency Benchmark
+The startup latency benchmark specifically measures the time required to initialize the job system with different fiber configurations:
+- **Default Configuration**: Standard fiber pool size for balanced performance
+- **Minimal Configuration**: Reduced pool size for fastest possible startup
+- **Large Configuration**: Increased pool size for high-throughput workloads
+
+This benchmark validates the incremental fiber allocation optimization that reduced startup time from 4-5ms to <1ms, ensuring no runtime allocation glitches while maintaining fast initialization.
 
 ## Requirements
 

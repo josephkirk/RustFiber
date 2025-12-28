@@ -12,9 +12,49 @@ use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use crossbeam::utils::{Backoff, CachePadded};
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
+
+// Thread-Local Storage for the worker's FrameAllocator
+thread_local! {
+    static ACTIVE_ALLOCATOR: Cell<Option<*mut FrameAllocator>> = const { Cell::new(None) };
+}
+
+/// Helper to temporarily expose the allocator via TLS
+struct ScopedAllocator;
+
+impl ScopedAllocator {
+    /// Registers the allocator in TLS.
+    ///
+    /// # Safety
+    /// Caller must ensure the allocator outlives this struct and is not accessed uniquely
+    /// while accessed via TLS.
+    unsafe fn new(ptr: *mut FrameAllocator) -> Self {
+        ACTIVE_ALLOCATOR.with(|tls| tls.set(Some(ptr)));
+        Self
+    }
+}
+
+impl Drop for ScopedAllocator {
+    fn drop(&mut self) {
+        ACTIVE_ALLOCATOR.with(|tls| tls.set(None));
+    }
+}
+
+/// Executes a closure wih the current thread's frame allocator, if available.
+pub fn with_current_allocator<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut FrameAllocator) -> R,
+{
+    ACTIVE_ALLOCATOR.with(|tls| tls.get().map(|ptr| unsafe { f(&mut *ptr) }))
+}
+
+/// Returns a raw pointer to the current thread's frame allocator, if active.
+pub fn get_current_allocator() -> Option<*mut FrameAllocator> {
+    ACTIVE_ALLOCATOR.with(|tls| tls.get())
+}
 
 /// A worker thread that executes jobs from a queue.
 pub struct Worker {
@@ -31,13 +71,13 @@ pub(crate) struct WorkerParams {
     pub(crate) high_priority_injector: Arc<Injector<Job>>,
     pub(crate) shutdown: Arc<CachePadded<AtomicBool>>,
     pub(crate) active_workers: Arc<CachePadded<AtomicUsize>>,
-    pub(crate) fiber_pool: Arc<FiberPool>,
     pub(crate) tier: u32,
     pub(crate) threshold: usize,
     pub(crate) core_id: Option<CoreId>,
     pub(crate) strategy: PinningStrategy,
-    pub(crate) allocator: FrameAllocator,
+    pub(crate) fiber_config: crate::job_system::FiberConfig,
     pub(crate) frame_index: Arc<CachePadded<AtomicU64>>,
+    pub(crate) topology: Arc<crate::topology::Topology>,
 }
 
 impl Worker {
@@ -65,20 +105,71 @@ impl Worker {
     /// Main execution loop for the worker thread with work-stealing.
     fn run_loop(params: WorkerParams) {
         let WorkerParams {
+            id: worker_id,
             local_queue,
             stealers,
             injector,
             high_priority_injector,
             shutdown,
             active_workers,
-            fiber_pool,
             tier,
             threshold,
             strategy,
-            mut allocator,
+            fiber_config,
             frame_index,
+            topology,
             ..
         } = params;
+
+        // Initialize FrameAllocator on the thread (First-Touch)
+        let mut allocator = FrameAllocator::new(fiber_config.frame_stack_size);
+
+        // SAFETY: Allocator lives as long as the function (and this scope).
+        // Access via TLS is strictly local to this thread.
+        let _scope = unsafe { ScopedAllocator::new(&mut allocator as *mut _) };
+
+        // Initialize FiberPool on the thread (First-Touch)
+        // Initialize FiberPool on the thread (First-Touch)
+        let mut fiber_pool = FiberPool::new(
+            fiber_config.initial_pool_size,
+            fiber_config.stack_size,
+            fiber_config.prefetch_pages,
+        );
+
+        // Compute Steal Order based on Topology
+        // 1. Siblings (Same NUMA Node)
+        // 2. Others (Remote NUMA Nodes)
+        let mut steal_order = Vec::new();
+
+        // Add siblings first
+        if let Some(siblings) = topology.get_siblings(worker_id) {
+            for &sibling_id in siblings {
+                if sibling_id != worker_id && sibling_id < stealers.len() {
+                    steal_order.push(sibling_id);
+                }
+            }
+        }
+
+        // Add remaining workers
+        for i in 0..stealers.len() {
+            if i != worker_id && !steal_order.contains(&i) {
+                steal_order.push(i);
+            }
+        }
+
+        // Rotate steal order to avoid convoy effect (all workers stealing from 0 first)
+        // This spreads the stealing load across all workers.
+        if !steal_order.is_empty() {
+            let rotate_amt = worker_id % steal_order.len();
+            steal_order.rotate_left(rotate_amt);
+        }
+
+        // Optimization: Flatten the stealing list to avoid double indirection (Vec<usize> -> stealers[idx])
+        // and bounds checks during the hot loop. We clone the stealers (lightweight handles) into a local Vec.
+        let ordered_stealers: Vec<_> = steal_order
+            .iter()
+            .map(|&idx| stealers[idx].clone())
+            .collect();
 
         // Init backoff outside the loop so it persists across iterations
         let backoff = Backoff::new();
@@ -111,8 +202,7 @@ impl Worker {
                 continue;
             }
 
-            // Try to get a job: High Priority -> Local -> Steal -> Global
-            // We check high priority global queue first
+            // Try to get a job: High Priority -> Local -> Steal (Topology Aware) -> Global
             let job = loop {
                 match high_priority_injector.steal() {
                     crossbeam::deque::Steal::Success(job) => break Some(job),
@@ -122,10 +212,10 @@ impl Worker {
             }
             .or_else(|| local_queue.pop())
             .or_else(|| {
-                // Try to steal from other workers first
-                stealers
+                // Try to steal from other workers using Topology-Aware order
+                ordered_stealers
                     .iter()
-                    .map(|s| s.steal())
+                    .map(|s| s.steal_batch_and_pop(&local_queue))
                     .find_map(|steal_result| match steal_result {
                         crossbeam::deque::Steal::Success(job) => Some(job),
                         _ => None,
@@ -279,7 +369,19 @@ impl Worker {
                 }
                 None => {
                     // No work available
+                    // No work available
                     if backoff.is_completed() {
+                        // Pre-warming Layer:
+                        // If the fiber pool is below the target size, incrementally allocate one fiber.
+                        // This allows for "Interleaved Pre-warning" where the pool grows during idle cycles
+                        // rather than stalling the thread at startup.
+                        if fiber_pool.len() < fiber_config.target_pool_size {
+                            fiber_pool.grow(1);
+                            // Reset backoff to check for work again immediately (allocation counts as work)
+                            backoff.reset();
+                            continue;
+                        }
+
                         // Deep Idle: Release SMT resources completely for a short while
                         thread::sleep(std::time::Duration::from_micros(100));
                         backoff.reset();
@@ -315,7 +417,7 @@ pub struct WorkerPool {
     shutdown: Arc<CachePadded<AtomicBool>>,
     active_workers: Arc<CachePadded<AtomicUsize>>,
     frame_index: Arc<CachePadded<AtomicU64>>,
-    _fiber_pool: Arc<FiberPool>,
+    // _fiber_pool: Arc<FiberPool>, // Removed as it is now thread-local
 }
 
 impl WorkerPool {
@@ -352,11 +454,10 @@ impl WorkerPool {
         let shutdown = Arc::new(CachePadded::new(AtomicBool::new(false)));
         let active_workers = Arc::new(CachePadded::new(AtomicUsize::new(0)));
         let frame_index = Arc::new(CachePadded::new(AtomicU64::new(0)));
+        let topology = Arc::new(crate::topology::Topology::detect());
 
-        let fiber_pool = Arc::new(FiberPool::new(
-            config.initial_pool_size * num_threads,
-            config.stack_size,
-        ));
+        // We no longer create a global FiberPool here.
+        // It is created lazily in each worker thread.
 
         let mut local_queues = Vec::with_capacity(num_threads);
         let mut stealers = Vec::with_capacity(num_threads);
@@ -445,12 +546,15 @@ impl WorkerPool {
                 shutdown: Arc::clone(&shutdown),
                 core_id,
                 active_workers: Arc::clone(&active_workers),
-                fiber_pool: Arc::clone(&fiber_pool),
                 tier: tiers[id],
                 threshold: thresholds[id],
                 strategy,
-                allocator: FrameAllocator::new(config.frame_stack_size),
+                // Pass config to allow local creation (and only use per-worker limit, not total * num_threads)
+                // Wait, previous code multiplied: config.initial_pool_size * num_threads.
+                // Now each worker gets config.initial_pool_size. This matches.
+                fiber_config: config.clone(),
                 frame_index: Arc::clone(&frame_index),
+                topology: Arc::clone(&topology),
             }));
         }
 
@@ -461,7 +565,7 @@ impl WorkerPool {
             shutdown,
             active_workers,
             frame_index,
-            _fiber_pool: fiber_pool,
+            // _fiber_pool: fiber_pool, // Removed
         }
     }
 

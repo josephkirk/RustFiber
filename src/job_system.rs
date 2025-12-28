@@ -15,18 +15,26 @@ use std::time::Duration;
 pub struct FiberConfig {
     /// Stack size for each fiber in bytes. Default: 512KB.
     pub stack_size: usize,
-    /// Initial number of fibers to pre-allocate per worker. Default: 128.
+    /// Initial number of fibers to pre-allocate per worker. Default: 16 (Fast Startup).
     pub initial_pool_size: usize,
+    /// Target number of fibers to keep in the pool. Default: 128.
+    /// Workers will incrementally allocate fibers up to this limit during idle cycles.
+    pub target_pool_size: usize,
     /// Size of the per-worker frame allocator in bytes. Default: 1MB.
     pub frame_stack_size: usize,
+    /// Whether to prefetch stack pages for NUMA locality. Default: false.
+    /// Currently disabled due to Windows compatibility issues.
+    pub prefetch_pages: bool,
 }
 
 impl Default for FiberConfig {
     fn default() -> Self {
         Self {
             stack_size: 512 * 1024,
-            initial_pool_size: 128,
+            initial_pool_size: 16, // Reduced for fast startup (NUMA-friendly)
+            target_pool_size: 128, // Workers will grow to this size in background
             frame_stack_size: 1024 * 1024,
+            prefetch_pages: false, // Disabled due to Windows compatibility issues
         }
     }
 }

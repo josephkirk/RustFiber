@@ -1,36 +1,60 @@
 use crate::fiber::Fiber;
-use crossbeam::queue::SegQueue;
 // use std::sync::Arc;
 
 /// A pool of reusable fibers to minimize stack allocation overhead.
+/// Note: This pool is designed to be Thread-Local (used by a single Worker).
 pub struct FiberPool {
-    pool: SegQueue<Box<Fiber>>,
+    #[allow(clippy::vec_box)]
+    // Fibers must be pinned/stable pointers as they contain self-referential WaitNodes
+    pool: Vec<Box<Fiber>>,
     stack_size: usize,
+    prefetch_pages: bool,
 }
 
 impl FiberPool {
     /// Creates a new fiber pool with pre-allocated fibers.
-    pub fn new(initial_count: usize, stack_size: usize) -> Self {
-        let pool = SegQueue::new();
-        for _ in 0..initial_count {
-            pool.push(Box::new(Fiber::new(stack_size)));
-        }
+    pub fn new(initial_count: usize, stack_size: usize, prefetch_pages: bool) -> Self {
+        let mut pool = FiberPool {
+            pool: Vec::with_capacity(initial_count),
+            stack_size,
+            prefetch_pages,
+        };
+        pool.grow(initial_count);
+        pool
+    }
 
-        FiberPool { pool, stack_size }
+    /// Grows the pool by the specified number of fibers.
+    /// This allows for interleaved pre-warming (allocating over multiple frames)
+    /// rather than taking a massive stall at startup.
+    pub fn grow(&mut self, count: usize) {
+        for _ in 0..count {
+            self.pool
+                .push(Box::new(Fiber::new(self.stack_size, self.prefetch_pages)));
+        }
     }
 
     /// Retrieves a fiber from the pool or creates a new one if empty.
-    pub fn get(&self) -> Box<Fiber> {
+    pub fn get(&mut self) -> Box<Fiber> {
         if let Some(mut fiber) = self.pool.pop() {
-            fiber.reset(self.stack_size);
+            fiber.reset(self.stack_size, self.prefetch_pages);
             fiber
         } else {
-            Box::new(Fiber::new(self.stack_size))
+            Box::new(Fiber::new(self.stack_size, self.prefetch_pages))
         }
     }
 
     /// Returns a fiber to the pool for reuse.
-    pub fn return_fiber(&self, fiber: Box<Fiber>) {
+    pub fn return_fiber(&mut self, fiber: Box<Fiber>) {
         self.pool.push(fiber);
+    }
+
+    /// Returns the current number of fibers in the pool.
+    pub fn len(&self) -> usize {
+        self.pool.len()
+    }
+
+    /// Returns true if the pool is empty.
+    pub fn is_empty(&self) -> bool {
+        self.pool.is_empty()
     }
 }
