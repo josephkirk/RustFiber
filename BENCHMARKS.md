@@ -12,6 +12,7 @@ This directory contains benchmark scripts that test the RustFiber job system wit
    - MG (Multi-Grid) - Communication and memory bandwidth
    - CG (Conjugate Gradient) - Irregular memory access patterns
 5. **Allocation Throughput** - Baseline test of the `FrameAllocator` and `Job::new` logic, measuring raw per-task allocation cost (~10ns/job).
+6. **Startup Latency** - Measures job system initialization time across different fiber configurations, validating the incremental allocation optimization that reduced startup from 4-5ms to <1ms.
 
 ## Running Benchmarks
 
@@ -125,6 +126,14 @@ To ensure measurements reflect the high-frequency steady state of the job system
 - **OS Settle Period**: Each benchmark waits **20ms** after initializing the `JobSystem`. This allows worker threads, core affinity masks, and CPU frequency scaling to stabilize.
 - **Substantial Warmup**: A massive parallel task (e.g., 100,000 items) is executed before recording. This primes the `FrameAllocator` arenas and wakes up all worker fibers.
 - **Worker-Local Measurement**: Benchmarks like "Allocation Throughput" measure the **inner worker loop duration** directly via atomics, ensuring high-level scheduling overhead does not skew the raw per-task performance data.
+
+## Startup Latency Benchmark
+The startup latency benchmark specifically measures the time required to initialize the job system with different fiber configurations:
+- **Default Configuration**: Standard fiber pool size for balanced performance
+- **Minimal Configuration**: Reduced pool size for fastest possible startup
+- **Large Configuration**: Increased pool size for high-throughput workloads
+
+This benchmark validates the incremental fiber allocation optimization that reduced startup time from 4-5ms to <1ms, ensuring no runtime allocation glitches while maintaining fast initialization.
 
 ## Requirements
 
