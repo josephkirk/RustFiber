@@ -1,3 +1,4 @@
+pub mod batching_benchmark;
 pub mod fibonacci;
 pub mod nas_benchmarks;
 pub mod producer_consumer;
@@ -57,6 +58,7 @@ fn main() {
         run_nas_ep_benchmark,
         run_nas_mg_benchmark,
         run_nas_cg_benchmark,
+        batching_benchmark::run_batching_benchmark,
     ];
 
     for run in runs {

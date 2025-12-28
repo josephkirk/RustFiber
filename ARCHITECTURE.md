@@ -101,6 +101,14 @@ To ensure scalability on high-core-count systems (e.g., Threadripper, EPYC), we 
 - **`WaitNode`**: Aligned to **64 bytes** (`#[repr(C, align(64))]`). Since these nodes are often stack-allocated or pooled, alignment prevents adjacent nodes from sharing cache lines during high-contention wakeups.
 - **Global State**: Hot global atomics in the `Worker` (`active_workers`, `shutdown`, `frame_index`) are padded using `crossbeam::utils::CachePadded`. This prevents Read-Write false sharing where a worker updating `active_workers` could invalidate the cache line containing `shutdown` or `frame_index` for all other workers.
 
+### 4.8 Job Batching & Range Splitting
+For effectively parallelizing loops with millions of tiny iterations (e.g., entity updates, particle simulations), creating a job per iteration is too expensive due to scheduler overhead.
+- **`parallel_for_chunked`**: Automatically splits a `Range<usize>` into large chunks (batches) relative to the number of worker threads.
+- **Optimization**: Instead of processing simple indices, the closure receives a `Range<usize>` (e.g., `0..10_000`). This allows the user to:
+    1.  Perform **Batch-Local Accumulation**: Maintain loop-local variables (sums, states) and only sync to global atomic state once per batch, eliminating cache line contention.
+    2.  Apply **SIMD**: Process contiguous data chunks efficiently using vector instructions.
+    3.  Reduce Scheduling Overhead: One job managing 10k items reduces scheduler pressure by 10,000x.
+
 ---
 
 

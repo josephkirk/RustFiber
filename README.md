@@ -24,6 +24,7 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Frame Allocator**: Bump allocation for jobs, eliminating heap fragmentation and locking.
 - **Zero-Overhead Submission**: Lock-free Local Queue submission and detached jobs for maximum throughput.
 - **Cache Alignment**: Critical structures (`Counter`, `WaitNode`) and global states are explicitly aligned/padded to prevent false sharing on high-core CPUs.
+- **Job Batching**: `parallel_for_chunked` API for processing millions of items with optimal granularity and SIMD/cache locality.
 
 ## Quick Start
 
@@ -103,9 +104,11 @@ This will test the system with:
    ![Fibonacci Strategy Comparison](./docs/comparison_cores_benchmark_1_million_tiny_tasks_fibonacci.png)
 2. **Recursive Task Decomposition (QuickSort)** - Work-stealing efficiency
    ![QuickSort Strategy Comparison](./docs/comparison_cores_benchmark_2_recursive_task_decomposition_quicksort.png)
-3. **Producer-Consumer Stress Test** - Throughput under contention
-   ![Producer-Consumer Strategy Comparison](./docs/comparison_cores_benchmark_3_producer-consumer_stress_test.png)
-4. **NAS Parallel Benchmarks** - Real-world computational patterns (EP, MG, CG)
+3. **Batching (Parallel For Auto)** - Throughput under contention
+   ![Batching Strategy Comparison](./docs/comparison_cores_batching_parallel_for_auto.png)
+4. **Producer-Consumer Stress Test** - Throughput under contention
+   ![Producer-Consumer Strategy Comparison](./docs/comparison_cores_benchmark_3_producer-consumer_lock-free.png)
+5. **NAS Parallel Benchmarks** - Real-world computational patterns (EP, MG, CG)
    ![NAS EP Strategy Comparison](./docs/comparison_cores_benchmark_4a_nas_ep_embarrassingly_parallel.png)
    ![NAS MG Strategy Comparison](./docs/comparison_cores_benchmark_4b_nas_mg_multi-grid.png)
    ![NAS CG Strategy Comparison](./docs/comparison_cores_benchmark_4c_nas_cg_conjugate_gradient.png)

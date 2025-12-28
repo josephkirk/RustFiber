@@ -113,6 +113,26 @@ impl<'a> Context<'a> {
         self.job_system.run_multiple_with_context(jobs)
     }
 
+    /// Executes a parallel for-loop over a range, split into batches.
+    ///
+    /// This method automatically divides the range into chunks of size `batch_size`
+    /// and spawns a job for each chunk.
+    pub fn parallel_for<F>(
+        &self,
+        range: std::ops::Range<usize>,
+        batch_size: usize,
+        body: F,
+    ) -> Counter
+    where
+        F: Fn(usize) + Send + Sync + Clone + 'static,
+    {
+        // Note: Context::parallel_for currently delegates to JobSystem::parallel_for.
+        // This means it will use the Global Injector for all chunks, not the Local Queue.
+        // For massive nested parallelism, this might cause contention.
+        // TODO: Optimize to use local queue if possible (requires refactoring parallel_for to be generic over submission target)
+        self.job_system.parallel_for(range, batch_size, body)
+    }
+
     /// Suspends the current fiber until the specified counter reaches zero.
     ///
     /// This is a non-blocking operation from the perspective of the worker thread.

@@ -75,11 +75,15 @@ These graphs show how performance scales from 1 to 32 cores.
 
 | Producer-Consumer | NAS EP |
 |-------------------|--------|
-| ![Producer-Consumer Cores](docs/comparison_cores_benchmark_3_producer-consumer_stress_test.png) | ![NAS EP Cores](docs/comparison_cores_benchmark_4a_nas_ep_embarrassingly_parallel.png) |
+| ![Producer-Consumer Cores](docs/comparison_cores_benchmark_3_producer-consumer_lock-free.png) | ![NAS EP Cores](docs/comparison_cores_benchmark_4a_nas_ep_embarrassingly_parallel.png) |
 
 | NAS MG | NAS CG |
 |--------|--------|
 | ![NAS MG Cores](docs/comparison_cores_benchmark_4b_nas_mg_multi-grid.png) | ![NAS CG Cores](docs/comparison_cores_benchmark_4c_nas_cg_conjugate_gradient.png) |
+
+| Batching (Parallel For) |
+|-------------------------|
+| ![Batching Cores](docs/comparison_cores_batching_parallel_for_auto.png) |
 
 ### Strategy Efficiency Comparison (32 Cores)
 These graphs compare different pinning strategies on a multi-core system.
@@ -90,11 +94,22 @@ These graphs compare different pinning strategies on a multi-core system.
 
 | Producer-Consumer | NAS EP |
 |-------------------|--------|
-| ![Producer-Consumer Strategies](docs/comparison_strategies_benchmark_3_producer-consumer_stress_test.png) | ![NAS EP Strategies](docs/comparison_strategies_benchmark_4a_nas_ep_embarrassingly_parallel.png) |
+| ![Producer-Consumer Strategies](docs/comparison_strategies_benchmark_3_producer-consumer_lock-free.png) | ![NAS EP Strategies](docs/comparison_strategies_benchmark_4a_nas_ep_embarrassingly_parallel.png) |
 
 | NAS MG | NAS CG |
 |--------|--------|
 | ![NAS MG Strategies](docs/comparison_strategies_benchmark_4b_nas_mg_multi-grid.png) | ![NAS CG Strategies](docs/comparison_strategies_benchmark_4c_nas_cg_conjugate_gradient.png) |
+
+| Batching (Parallel For) |
+|-------------------------|
+| ![Batching Strategies](docs/comparison_strategies_batching_parallel_for_auto.png) |
+
+## Batching (Parallel For) Performance
+The "Batching" benchmark tests the `parallel_for_chunked` API.
+*   **Without Batching**: 1 million tiny jobs overwhelm the scheduler (~100M instructions).
+*   **With Batching (Chunked)**: Work is split into ~128 large chunks (4x core count).
+*   **Optimization**: Critically, it allows **Batch-Local Accumulation**, reducing atomic synchronization from 1,000,000 ops to just ~128 ops.
+*   **Result**: Linear scaling up to memory bandwidth limits (>1B items/sec effective throughput).
 
 ## Requirements
 

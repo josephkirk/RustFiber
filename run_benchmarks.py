@@ -25,11 +25,12 @@ try:
     import matplotlib.pyplot as plt
     import matplotlib
     matplotlib.use('Agg')  # Non-interactive backend
-except ImportError:
-    print("Error: matplotlib is required. Install it with:")
-    print("  pip install matplotlib")
+    import psutil
+except ImportError as e:
+    print(f"Error: {e.name} is required. Install it with:")
+    print(f"  pip install {e.name}")
     print("Or with uv:")
-    print("  uv pip install matplotlib")
+    print(f"  uv pip install {e.name}")
     sys.exit(1)
 
 
@@ -41,10 +42,11 @@ def run_rust_benchmarks(strategy, thread_count):
     filename_map = {
         "Benchmark 1: Million Tiny Tasks (Fibonacci)": "benchmark_1_fibonacci.png",
         "Benchmark 2: Recursive Task Decomposition (QuickSort)": "benchmark_2_quicksort.png",
-        "Benchmark 3: Producer-Consumer Stress Test": "benchmark_3_producer_consumer.png",
+        "Benchmark 3: Producer-Consumer (Lock-Free)": "benchmark_3_producer_consumer.png",
         "Benchmark 4a: NAS EP (Embarrassingly Parallel)": "benchmark_4a_nas_ep.png",
         "Benchmark 4b: NAS MG (Multi-Grid)": "benchmark_4b_nas_mg.png",
         "Benchmark 4c: NAS CG (Conjugate Gradient)": "benchmark_4c_nas_cg.png",
+        "Batching (Parallel For Auto)": "benchmark_batching.png",
     }
 
     cmd = ["cargo", "run", "--bin", "benchmarks", "--release", "--", strategy, str(thread_count)]
@@ -85,6 +87,11 @@ def run_rust_benchmarks(strategy, thread_count):
         print(f"Error running benchmarks: {e}")
 
 
+def sanitize_filename(name):
+    """Sanitize benchmark name for use as a filename."""
+    return name.lower().replace(':', '').replace(' ', '_').replace('(', '').replace(')', '').replace('[', '').replace(']', '')
+
+
 def create_comparison_graph(benchmark_name, results_list, output_filename, comparison_label):
     """Create a comparison graph with multiple series."""
     if not results_list:
@@ -93,7 +100,11 @@ def create_comparison_graph(benchmark_name, results_list, output_filename, compa
     plt.figure(figsize=(12, 7))
     
     # Use a color map for distinct lines
-    colormap = plt.cm.get_cmap('tab10')
+    try:
+        colormap = matplotlib.colormaps['tab10']
+    except AttributeError:
+        # Fallback for older matplotlib versions
+        colormap = plt.cm.get_cmap('tab10')
     
     for i, result in enumerate(results_list):
         data_points = result['data_points']
@@ -119,7 +130,10 @@ def create_comparison_graph(benchmark_name, results_list, output_filename, compa
     plt.legend()
     
     # Add system info text box
-    info_text = f"Hardware: {os.cpu_count()} Total Cores"
+    phys_cores = psutil.cpu_count(logical=False)
+    log_cores = psutil.cpu_count(logical=True)
+    total_ram = psutil.virtual_memory().total / (1024**3)
+    info_text = f"Hardware: {phys_cores} Phys Cores, {log_cores} Log Cores, {total_ram:.2f} GB RAM"
     plt.figtext(0.5, 0.01, info_text, ha='center', fontsize=10, 
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
@@ -178,13 +192,16 @@ def main():
     elif "--compare-strategies" in sys.argv:
         mode = "compare-strategies"
     
-    actual_cores = os.cpu_count() or 1
+    # Get core counts
+    physical_cores = psutil.cpu_count(logical=False) or (os.cpu_count() // 2) or 1
+    logical_cores = psutil.cpu_count(logical=True) or os.cpu_count() or 1
     
     if mode == "compare-cores":
+        actual_cores = physical_cores
         print(f"\nMode: Core Comparison (Strategy: Linear)")
-        print(f"System has {actual_cores} cores.")
+        print(f"System has {actual_cores} physical cores.")
         
-        targets = [c for c in [1, 4, 16, 32, 64, 96] if c <= actual_cores]
+        targets = [c for c in [1, 4, 8, 16, 24, 32] if c <= actual_cores]
         print(f"Target core counts: {targets}")
         
         # benchmark_name -> list of results
@@ -198,16 +215,17 @@ def main():
                 comparison_data[name].append(result)
         
         for name, results in comparison_data.items():
-            safe_name = name.lower().replace(':', '').replace(' ', '_').replace('(', '').replace(')', '')
+            safe_name = sanitize_filename(name)
             filename = f"comparison_cores_{safe_name}.png"
             create_comparison_graph(name, results, filename, "cores")
 
     elif mode == "compare-strategies":
+        actual_cores = logical_cores
         if actual_cores < 16:
-            print(f"Error: Strategy comparison requires at least 16 cores. System has {actual_cores}.")
+            print(f"Error: Strategy comparison requires at least 16 cores. System has {actual_cores} logical cores.")
             sys.exit(1)
             
-        print(f"\nMode: Strategy Comparison (Cores: {actual_cores})")
+        print(f"\nMode: Strategy Comparison (Cores: {actual_cores} logical)")
         strategies = ["none", "linear", "avoid-smt", "ccd-isolation", "tiered-spillover"]
         
         # benchmark_name -> list of results
@@ -221,11 +239,12 @@ def main():
                 comparison_data[name].append(result)
                 
         for name, results in comparison_data.items():
-            safe_name = name.lower().replace(':', '').replace(' ', '_').replace('(', '').replace(')', '')
+            safe_name = sanitize_filename(name)
             filename = f"comparison_strategies_{safe_name}.png"
             create_comparison_graph(name, results, filename, "strategies")
     
     else: # single mode
+        actual_cores = logical_cores
         strategy = sys.argv[1] if len(sys.argv) > 1 else "linear"
         threads = int(sys.argv[2]) if len(sys.argv) > 2 else actual_cores
         
@@ -235,7 +254,7 @@ def main():
         print(f"\nMode: Single Run (Strategy: {strategy}, Threads: {threads})")
         for result in run_rust_benchmarks(strategy, threads):
             name = result['name']
-            safe_name = name.lower().replace(':', '').replace(' ', '_').replace('(', '').replace(')', '')
+            safe_name = sanitize_filename(name)
             filename = f"single_{safe_name}_{threads}c_{strategy}.png"
             create_single_graph(result, filename)
             print(f"Done: {name} -> docs/{filename}")

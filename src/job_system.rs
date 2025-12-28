@@ -300,6 +300,160 @@ impl JobSystem {
         counter
     }
 
+    /// Executes a parallel for-loop over a range, split into batches.
+    ///
+    /// This method automatically divides the range into chunks of size `batch_size`
+    /// and spawns a job for each chunk. This is significantly more efficient than
+    /// spawning a job per iteration for small loop bodies.
+    ///
+    /// # Arguments
+    ///
+    /// * `range` - The range of indices to iterate over (e.g., `0..1_000_000`)
+    /// * `batch_size` - The number of iterations per job.
+    /// * `body` - The closure to execute for each index. Must be `Clone + Send + Sync`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::new(4);
+    /// let data: Vec<i32> = vec![0; 1000];
+    ///
+    /// // Process 1000 items in chunks of 100 (10 jobs total)
+    /// let counter = job_system.parallel_for(0..1000, 100, |i| {
+    ///     // Process index i
+    /// });
+    /// job_system.wait_for_counter(&counter);
+    /// ```
+    pub fn parallel_for<F>(
+        &self,
+        range: std::ops::Range<usize>,
+        batch_size: usize,
+        body: F,
+    ) -> Counter
+    where
+        F: Fn(usize) + Send + Sync + Clone + 'static,
+    {
+        if range.is_empty() {
+            return Counter::new(0);
+        }
+
+        let len = range.len();
+        let batch_size = batch_size.max(1);
+        let num_batches = len.div_ceil(batch_size);
+
+        let start = range.start;
+        let counter = Counter::new(num_batches);
+
+        let mut jobs = Vec::with_capacity(num_batches);
+
+        for i in 0..num_batches {
+            let chunk_start = start + i * batch_size;
+            let chunk_end = (chunk_start + batch_size).min(range.end);
+            let body = body.clone();
+            let cnt = counter.clone();
+
+            let job = crate::job::Job::with_counter(
+                move || {
+                    for idx in chunk_start..chunk_end {
+                        body(idx);
+                    }
+                },
+                cnt,
+            )
+            .with_priority(crate::job::JobPriority::Normal);
+            jobs.push(job);
+        }
+
+        self.worker_pool.submit_batch(jobs);
+        counter
+    }
+
+    /// Executes a parallel for-loop with automatically calculated batch size.
+    ///
+    /// The batch size is chosen to be large enough to amortize overhead but small
+    /// enough to ensure good load balancing across all worker threads.
+    pub fn parallel_for_auto<F>(&self, range: std::ops::Range<usize>, body: F) -> Counter
+    where
+        F: Fn(usize) + Send + Sync + Clone + 'static,
+    {
+        let len = range.len();
+        if len == 0 {
+            return Counter::new(0);
+        }
+
+        // Heuristic: aim for 4 * num_workers batches to allow for work stealing
+        let num_workers = self.worker_pool.size();
+        let target_batches = num_workers * 4;
+        let batch_size = (len / target_batches).max(1);
+
+        self.parallel_for(range, batch_size, body)
+    }
+
+    /// Executes a parallel for-loop over a range, passing the whole chunk range to the closure.
+    ///
+    /// This variant allows manual loop unrolling or batch-local optimizations (like simd or local accumulation)
+    /// within the closure, which can be more efficient than per-index calls.
+    pub fn parallel_for_chunked<F>(
+        &self,
+        range: std::ops::Range<usize>,
+        batch_size: usize,
+        body: F,
+    ) -> Counter
+    where
+        F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
+    {
+        if range.is_empty() {
+            return Counter::new(0);
+        }
+
+        let len = range.len();
+        let batch_size = batch_size.max(1);
+        let num_batches = len.div_ceil(batch_size);
+
+        let start = range.start;
+        let counter = Counter::new(num_batches);
+
+        let mut jobs = Vec::with_capacity(num_batches);
+
+        for i in 0..num_batches {
+            let chunk_start = start + i * batch_size;
+            let chunk_end = (chunk_start + batch_size).min(range.end);
+            let body = body.clone();
+            let cnt = counter.clone();
+
+            let job = crate::job::Job::with_counter(
+                move || {
+                    body(chunk_start..chunk_end);
+                },
+                cnt,
+            )
+            .with_priority(crate::job::JobPriority::Normal);
+            jobs.push(job);
+        }
+
+        self.worker_pool.submit_batch(jobs);
+        counter
+    }
+
+    /// Executes a parallel for-loop (chunked) with automatically calculated batch size.
+    pub fn parallel_for_chunked_auto<F>(&self, range: std::ops::Range<usize>, body: F) -> Counter
+    where
+        F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
+    {
+        let len = range.len();
+        if len == 0 {
+            return Counter::new(0);
+        }
+
+        let num_workers = self.worker_pool.size();
+        let target_batches = num_workers * 4;
+        let batch_size = (len / target_batches).max(1);
+
+        self.parallel_for_chunked(range, batch_size, body)
+    }
+
     /// Submits a raw Job object to the global injector.
     /// Used for rescheduling yielded fibers.
     pub fn submit_to_injector(&self, job: Job) {
@@ -540,6 +694,55 @@ mod tests {
 
         job_system.wait_for_counter(&counter);
         assert_eq!(result.load(Ordering::SeqCst), 6);
+        job_system.shutdown().expect("Shutdown failed");
+    }
+
+    #[test]
+    fn test_parallel_for() {
+        let job_system = JobSystem::new(4);
+        let len = 1000;
+        let data = Arc::new(AtomicUsize::new(0));
+        let data_clone = data.clone();
+
+        let counter = job_system.parallel_for(0..len, 100, move |_idx| {
+            data_clone.fetch_add(1, Ordering::Relaxed);
+        });
+
+        job_system.wait_for_counter(&counter);
+        assert_eq!(data.load(Ordering::Relaxed), len);
+        job_system.shutdown().expect("Shutdown failed");
+    }
+
+    #[test]
+    fn test_parallel_for_auto() {
+        let job_system = JobSystem::new(4);
+        let len = 10000;
+        let data = Arc::new(AtomicUsize::new(0));
+        let data_clone = data.clone();
+
+        let counter = job_system.parallel_for_auto(0..len, move |_idx| {
+            data_clone.fetch_add(1, Ordering::Relaxed);
+        });
+
+        job_system.wait_for_counter(&counter);
+        assert_eq!(data.load(Ordering::Relaxed), len);
+        job_system.shutdown().expect("Shutdown failed");
+    }
+
+    #[test]
+    fn test_parallel_for_uneven() {
+        let job_system = JobSystem::new(4);
+        let len = 105;
+        let data = Arc::new(AtomicUsize::new(0));
+        let data_clone = data.clone();
+
+        // Batch size 10 means 10 chunks of 10 and 1 chunk of 5
+        let counter = job_system.parallel_for(0..len, 10, move |_idx| {
+            data_clone.fetch_add(1, Ordering::Relaxed);
+        });
+
+        job_system.wait_for_counter(&counter);
+        assert_eq!(data.load(Ordering::Relaxed), len);
         job_system.shutdown().expect("Shutdown failed");
     }
 }
