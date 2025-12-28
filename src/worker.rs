@@ -138,6 +138,7 @@ pub(crate) struct WorkerParams {
     pub(crate) frame_index: Arc<CachePadded<AtomicU64>>,
     pub(crate) topology: Arc<crate::topology::Topology>,
     pub(crate) parker: Arc<GlobalParker>,
+    pub(crate) has_work: Arc<Vec<CachePadded<AtomicBool>>>,
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Option<Arc<crate::metrics::Metrics>>,
 }
@@ -185,6 +186,7 @@ impl Worker {
             frame_index,
             topology,
             parker,
+            has_work,
             core_id: _,
             #[cfg(feature = "metrics")]
             metrics,
@@ -240,9 +242,10 @@ impl Worker {
 
         // Optimization: Flatten the stealing list to avoid double indirection (Vec<usize> -> stealers[idx])
         // and bounds checks during the hot loop. We clone the stealers (lightweight handles) into a local Vec.
+        // Load-Aware: We now store (id, stealer) tuple to check status flags.
         let ordered_stealers: Vec<_> = steal_order
             .iter()
-            .map(|&idx| stealers[idx].clone())
+            .map(|&idx| (idx, stealers[idx].clone()))
             .collect();
 
         // Init backoff outside the loop so it persists across iterations
@@ -251,7 +254,6 @@ impl Worker {
         // Initialize RNG for randomized back-off
         // We use SmallRng for performance as we might call it frequently in the idle loop
         let mut rng = rand::rngs::SmallRng::from_rng(&mut rand::rng());
-
 
 
         // Track local frame index to detect changes
@@ -278,7 +280,8 @@ impl Worker {
             // Tiered Spillover Logic: Stay dormant if load is below threshold
             if tier > 1 && active_workers.load(Ordering::Relaxed) < threshold && injector.is_empty()
             {
-                thread::yield_now();
+                // park logic handles this naturally now, but explicit check saves mutex 
+                parker.park();
                 continue;
             }
 
@@ -304,6 +307,12 @@ impl Worker {
                         metrics.local_queue_pops.fetch_add(1, Ordering::Relaxed);
                     }
                 }
+                
+                // Load-Aware: If local queue is empty, update flag
+                if j.is_none() {
+                     has_work[worker_id].store(false, Ordering::Relaxed);
+                }
+                
                 j
             })
             .or_else(|| {
@@ -311,7 +320,12 @@ impl Worker {
                 let mut steal_attempted = false;
                 let steal_result = ordered_stealers
                     .iter()
-                    .map(|s| {
+                    .map(|(victim_id, s)| {
+                        // Load-Aware: Check if victim has work before attempting steal
+                        if !has_work[*victim_id].load(Ordering::Relaxed) {
+                            return crossbeam::deque::Steal::Empty;
+                        }
+                        
                         steal_attempted = true;
                         let result = s.steal_batch_and_pop(&local_queue);
                         #[cfg(feature = "metrics")]
@@ -320,9 +334,13 @@ impl Worker {
                                 crossbeam::deque::Steal::Success(_) => {
                                     metrics.worker_steals_success.fetch_add(1, Ordering::Relaxed);
                                     metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                                    // We stole work and populated our queue (steal_batch), so we have work now
+                                    has_work[worker_id].store(true, Ordering::Relaxed);
                                 }
                                 crossbeam::deque::Steal::Empty => {
                                     metrics.worker_steals_failed.fetch_add(1, Ordering::Relaxed);
+                                    // Optimization: If steal failed, we can verify if the flag was stale? 
+                                    // No, just continue.
                                 }
                                 crossbeam::deque::Steal::Retry => {
                                     metrics.worker_steals_retry.fetch_add(1, Ordering::Relaxed);
@@ -357,6 +375,8 @@ impl Worker {
                                         metrics.injector_steals_success.fetch_add(1, Ordering::Relaxed);
                                         metrics.global_injector_pops.fetch_add(1, Ordering::Relaxed);
                                         metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                                        // We have work now
+                                        has_work[worker_id].store(true, Ordering::Relaxed);
                                     }
                                     crossbeam::deque::Steal::Empty => {
                                         metrics.injector_steals_failed.fetch_add(1, Ordering::Relaxed);
@@ -513,6 +533,9 @@ impl Worker {
                                             metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
                                         }
                                         local_queue.push(job);
+                                         // Load-Aware: We have new work
+                                         has_work[worker_id].store(true, Ordering::Relaxed);
+                                         
                                         // Signal potential sleepers that *local* work is available (which can be stolen)
                                         parker.wake_one();
                                     }
@@ -596,6 +619,7 @@ pub struct WorkerPool {
     active_workers: Arc<CachePadded<AtomicUsize>>,
     frame_index: Arc<CachePadded<AtomicU64>>,
     parker: Arc<GlobalParker>,
+    has_work: Arc<Vec<CachePadded<AtomicBool>>>,
     // _fiber_pool: Arc<FiberPool>, // Removed as it is now thread-local
 }
 
@@ -638,6 +662,13 @@ impl WorkerPool {
         let frame_index = Arc::new(CachePadded::new(AtomicU64::new(0)));
         let topology = Arc::new(crate::topology::Topology::detect());
         let parker = Arc::new(GlobalParker::new());
+
+        // Load-Aware Stealing: Flags for each worker
+        let mut has_work_vec = Vec::with_capacity(num_threads);
+        for _ in 0..num_threads {
+            has_work_vec.push(CachePadded::new(AtomicBool::new(false)));
+        }
+        let has_work = Arc::new(has_work_vec);
 
         // We no longer create a global FiberPool here.
         // It is created lazily in each worker thread.
@@ -739,6 +770,7 @@ impl WorkerPool {
                 frame_index: Arc::clone(&frame_index),
                 topology: Arc::clone(&topology),
                 parker: Arc::clone(&parker),
+                has_work: Arc::clone(&has_work),
                 #[cfg(feature = "metrics")]
                 metrics: metrics.as_ref().map(Arc::clone),
             }));
@@ -752,6 +784,7 @@ impl WorkerPool {
             active_workers,
             frame_index,
             parker,
+            has_work,
             // _fiber_pool: fiber_pool, // Removed
         }
     }
