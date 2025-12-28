@@ -21,6 +21,8 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Stack Reuse**: Eliminated `mmap` overhead by recycling fiber stacks.
 - **Adaptive Spinning**: Reduced latency for fine-grained dependency chains.
 - **Strategy-Aware Scheduling**: Hybrid Local/Global scheduling to optimize for both cache affinity (`Linear`) and load balancing (`TieredSpillover`).
+- **Frame Allocator**: Bump allocation for jobs, eliminating heap fragmentation and locking.
+- **Zero-Overhead Submission**: Lock-free Local Queue submission and detached jobs for maximum throughput.
 
 ## Quick Start
 

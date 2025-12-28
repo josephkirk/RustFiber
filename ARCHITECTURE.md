@@ -83,6 +83,18 @@ Different workloads require different resource guarantees.
     - **Low**: Background tasks.
     - **Scheduling**: High-priority jobs utilize a dedicated global injector and are prioritized during work stealing and yielding. In `TieredSpillover`, yielded High-priority fibers are immediately pushed to the high-priority global injector to wake up available workers.
 
+### 4.5 Frame Allocator (Bump Allocation)
+Memory allocation is a significant bottleneck for fine-grained tasks.
+- **Per-Fiber Allocator**: Each fiber context owns a `Linear` (bump) allocator.
+- **Zero-Cost**: Allocating a job closure or a `Counter` inside `ctx.spawn_job` is essentially a pointer increment.
+- **Reset**: The allocator is reset automatically when the fiber is recycled or when a new frame begins, making deallocation free.
+
+### 4.6 Zero-Overhead Job Submission
+We introduced specialized spawn methods to eliminate remaining overheads:
+- **`spawn_detached`**: "Fire-and-forget" jobs. No `Counter` is allocated. Perfect for "million-particle" simulations where individual completion tracking is unnecessary (track the group instead).
+- **`spawn_with_counter`**: Allows thousands of jobs to share a single `Counter` (via `Arc`), reducing atomic hardware synchronization traffic.
+- **Local Queue Submission**: Jobs spawned from within a fiber are pushed directly to the worker's **Lock-Free Local Queue** (LIFO), bypassing the Global Injector lock entirely.
+
 ---
 
 ## 5. Performance
