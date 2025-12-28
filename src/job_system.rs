@@ -56,6 +56,29 @@ impl Default for FiberConfig {
     }
 }
 
+/// Hints for the auto-partitioning algorithm in `parallel_for` methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GranularityHint {
+    /// Very cheap per-element work (< 100 cycles). 
+    /// Uses larger batches to minimize scheduling overhead.
+    /// Target: 2 batches per worker.
+    Trivial,
+    
+    /// Light computation (100-1000 cycles). Default behavior.
+    /// Target: 4 batches per worker.
+    Light,
+    
+    /// Moderate computation (1K-10K cycles).
+    /// Uses smaller batches for better load balancing.
+    /// Target: 8 batches per worker.
+    Moderate,
+    
+    /// Heavy computation (> 10K cycles).
+    /// Uses fine-grained batches.
+    /// Target: 16 batches per worker.
+    Heavy,
+}
+
 /// The main job system managing worker threads and job execution.
 ///
 /// This is the primary interface for the fiber-based job system.
@@ -574,6 +597,8 @@ impl JobSystem {
         counter
     }
 
+
+
     /// Executes a parallel for-loop over a range, split into batches.
     ///
     /// This method automatically divides the range into chunks of size `batch_size`
@@ -646,9 +671,22 @@ impl JobSystem {
 
     /// Executes a parallel for-loop with automatically calculated batch size.
     ///
-    /// The batch size is chosen to be large enough to amortize overhead but small
-    /// enough to ensure good load balancing across all worker threads.
+    /// The batch size is chosen based on the `GranularityHint::Light` profile (4 batches per worker).
+    /// For more control, use `parallel_for_with_hint`.
     pub fn parallel_for_auto<F>(&self, range: std::ops::Range<usize>, body: F) -> Counter
+    where
+        F: Fn(usize) + Send + Sync + Clone + 'static,
+    {
+        self.parallel_for_with_hint(range, GranularityHint::Light, body)
+    }
+
+    /// Executes a parallel for-loop with batch size tuned by a granularity hint.
+    pub fn parallel_for_with_hint<F>(
+        &self,
+        range: std::ops::Range<usize>,
+        hint: GranularityHint,
+        body: F,
+    ) -> Counter
     where
         F: Fn(usize) + Send + Sync + Clone + 'static,
     {
@@ -657,9 +695,15 @@ impl JobSystem {
             return Counter::new(0);
         }
 
-        // Heuristic: aim for 4 * num_workers batches to allow for work stealing
         let num_workers = self.worker_pool.size();
-        let target_batches = num_workers * 4;
+        let batches_per_worker = match hint {
+            GranularityHint::Trivial => 2,
+            GranularityHint::Light => 4,
+            GranularityHint::Moderate => 8,
+            GranularityHint::Heavy => 16,
+        };
+
+        let target_batches = num_workers * batches_per_worker;
         let batch_size = (len / target_batches).max(1);
 
         self.parallel_for(range, batch_size, body)
@@ -712,7 +756,22 @@ impl JobSystem {
     }
 
     /// Executes a parallel for-loop (chunked) with automatically calculated batch size.
+    ///
+    /// Uses `GranularityHint::Light` (4 batches per worker).
     pub fn parallel_for_chunked_auto<F>(&self, range: std::ops::Range<usize>, body: F) -> Counter
+    where
+        F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
+    {
+        self.parallel_for_chunked_with_hint(range, GranularityHint::Light, body)
+    }
+
+    /// Executes a parallel for-loop (chunked) with batch size tuned by a granularity hint.
+    pub fn parallel_for_chunked_with_hint<F>(
+        &self,
+        range: std::ops::Range<usize>,
+        hint: GranularityHint,
+        body: F,
+    ) -> Counter
     where
         F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
     {
@@ -722,7 +781,14 @@ impl JobSystem {
         }
 
         let num_workers = self.worker_pool.size();
-        let target_batches = num_workers * 4;
+        let batches_per_worker = match hint {
+            GranularityHint::Trivial => 2,
+            GranularityHint::Light => 4,
+            GranularityHint::Moderate => 8,
+            GranularityHint::Heavy => 16,
+        };
+
+        let target_batches = num_workers * batches_per_worker;
         let batch_size = (len / target_batches).max(1);
 
         self.parallel_for_chunked(range, batch_size, body)
