@@ -126,6 +126,55 @@
 //!
 //! job_system.wait_for_counter(&root);
 //! ```
+//!
+//! ### 5. Simplified API with Presets
+//!
+//! For common use cases, use preset constructors that provide optimized defaults:
+//!
+//! ```no_run
+//! use rustfiber::JobSystem;
+//!
+//! // For gaming: high concurrency, avoids SMT
+//! let gaming_system = JobSystem::for_gaming();
+//!
+//! // For data processing: balanced settings
+//! let data_system = JobSystem::for_data_processing();
+//!
+//! // For low latency: minimal pools, CCD isolation
+//! let latency_system = JobSystem::for_low_latency();
+//! ```
+//!
+//! ### 6. Builder Pattern for Custom Configuration
+//!
+//! Use the builder for gradual configuration:
+//!
+//! ```no_run
+//! use rustfiber::{JobSystem, PinningStrategy};
+//!
+//! let job_system = JobSystem::builder()
+//!     .thread_count(8)
+//!     .stack_size(256 * 1024)
+//!     .initial_pool_size(32)
+//!     .pinning_strategy(PinningStrategy::AvoidSMT)
+//!     .build();
+//! ```
+//!
+//! ## Best Use Cases
+//!
+//! ### Gaming
+//! - Use `JobSystem::for_gaming()` for game engines
+//! - High fiber counts, avoids SMT for cache performance
+//! - Suitable for entity updates, physics, rendering
+//!
+//! ### Data Processing
+//! - Use `JobSystem::for_data_processing()` for batch jobs
+//! - Balanced settings for analytics, image processing
+//! - Linear pinning for predictable performance
+//!
+//! ### Low Latency
+//! - Use `JobSystem::for_low_latency()` for real-time systems
+//! - Small pools, CCD isolation to reduce jitter
+//! - Ideal for audio processing, control systems
 
 pub mod allocator;
 pub mod context;
@@ -159,7 +208,7 @@ pub enum PinningStrategy {
 pub use context::Context;
 pub use counter::Counter;
 pub use job::Job;
-pub use job_system::JobSystem;
+pub use job_system::{JobSystem, JobSystemBuilder};
 
 #[cfg(test)]
 mod tests;

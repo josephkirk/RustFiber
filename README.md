@@ -75,6 +75,38 @@ job_system.wait_for_counter(&counter);
 job_system.shutdown();
 ```
 
+### Simplified API with Presets
+
+For common use cases, use preset constructors that provide optimized defaults:
+
+```rust
+use rustfiber::JobSystem;
+
+// For gaming: high concurrency, avoids SMT
+let gaming_system = JobSystem::for_gaming();
+
+// For data processing: balanced settings
+let data_system = JobSystem::for_data_processing();
+
+// For low latency: minimal pools, CCD isolation
+let latency_system = JobSystem::for_low_latency();
+```
+
+### Builder Pattern for Custom Configuration
+
+Use the builder for gradual configuration:
+
+```rust
+use rustfiber::{JobSystem, PinningStrategy};
+
+let job_system = JobSystem::builder()
+    .thread_count(8)
+    .stack_size(256 * 1024)
+    .initial_pool_size(32)
+    .pinning_strategy(PinningStrategy::AvoidSMT)
+    .build();
+```
+
 ## Building
 
 ```bash

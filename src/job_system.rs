@@ -4,9 +4,15 @@
 //! parallel work. It provides a clean API for submitting jobs, tracking
 //! their completion via counters, and waiting for results.
 
+#[cfg(test)]
+use crate::PinningStrategy;
 use crate::counter::Counter;
 use crate::job::Job;
 use crate::worker::{WorkerPool, WorkerPoolError};
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -58,6 +64,94 @@ impl Default for FiberConfig {
 /// submitting jobs and synchronizing on their completion.
 pub struct JobSystem {
     worker_pool: WorkerPool,
+}
+
+/// Builder for creating JobSystem instances with custom configuration.
+///
+/// Provides a fluent API for configuring thread count, fiber settings,
+/// and pinning strategy before building the JobSystem.
+pub struct JobSystemBuilder {
+    num_threads: Option<usize>,
+    fiber_config: FiberConfig,
+    pinning_strategy: crate::PinningStrategy,
+}
+
+impl Default for JobSystemBuilder {
+    fn default() -> Self {
+        Self {
+            num_threads: None, // Will use available_parallelism
+            fiber_config: FiberConfig::default(),
+            pinning_strategy: crate::PinningStrategy::None,
+        }
+    }
+}
+
+impl JobSystemBuilder {
+    /// Creates a new builder with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the number of worker threads.
+    ///
+    /// If not set, defaults to the number of available CPU cores.
+    pub fn thread_count(mut self, count: usize) -> Self {
+        self.num_threads = Some(count);
+        self
+    }
+
+    /// Sets the fiber configuration.
+    pub fn fiber_config(mut self, config: FiberConfig) -> Self {
+        self.fiber_config = config;
+        self
+    }
+
+    /// Sets the CPU pinning strategy.
+    pub fn pinning_strategy(mut self, strategy: crate::PinningStrategy) -> Self {
+        self.pinning_strategy = strategy;
+        self
+    }
+
+    /// Sets the stack size for fibers.
+    pub fn stack_size(mut self, size: usize) -> Self {
+        self.fiber_config.stack_size = size;
+        self
+    }
+
+    /// Sets the initial fiber pool size per worker.
+    pub fn initial_pool_size(mut self, size: usize) -> Self {
+        self.fiber_config.initial_pool_size = size;
+        self
+    }
+
+    /// Sets the target fiber pool size per worker.
+    pub fn target_pool_size(mut self, size: usize) -> Self {
+        self.fiber_config.target_pool_size = size;
+        self
+    }
+
+    /// Sets the frame allocator stack size per worker.
+    pub fn frame_stack_size(mut self, size: usize) -> Self {
+        self.fiber_config.frame_stack_size = size;
+        self
+    }
+
+    /// Builds the JobSystem with the configured settings.
+    pub fn build(self) -> JobSystem {
+        let num_threads = self.num_threads.unwrap_or_else(|| {
+            thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        });
+
+        JobSystem {
+            worker_pool: WorkerPool::new_with_strategy(
+                num_threads,
+                self.pinning_strategy,
+                self.fiber_config,
+            ),
+        }
+    }
 }
 
 impl JobSystem {
@@ -153,6 +247,121 @@ impl JobSystem {
             .map(|n| n.get())
             .unwrap_or(4);
         JobSystem::new(num_cpus)
+    }
+
+    /// Returns a builder for creating a JobSystem with custom configuration.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::builder()
+    ///     .thread_count(8)
+    ///     .build();
+    /// ```
+    pub fn builder() -> JobSystemBuilder {
+        JobSystemBuilder::new()
+    }
+
+    /// Creates a job system optimized for gaming workloads.
+    ///
+    /// Uses high concurrency settings with large fiber pools and avoids SMT
+    /// for better cache performance in game loops.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::for_gaming();
+    /// ```
+    pub fn for_gaming() -> Self {
+        let num_cpus = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+
+        let config = FiberConfig {
+            stack_size: 256 * 1024,            // Smaller stacks for many fibers
+            initial_pool_size: 64,             // Large initial pool for high concurrency
+            target_pool_size: 512,             // Allow many fibers
+            frame_stack_size: 2 * 1024 * 1024, // Larger frame allocator
+            prefetch_pages: false,
+        };
+
+        JobSystem {
+            worker_pool: WorkerPool::new_with_strategy(
+                num_cpus,
+                crate::PinningStrategy::AvoidSMT,
+                config,
+            ),
+        }
+    }
+
+    /// Creates a job system optimized for data processing workloads.
+    ///
+    /// Uses balanced settings suitable for batch processing and analytics.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::for_data_processing();
+    /// ```
+    pub fn for_data_processing() -> Self {
+        let num_cpus = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+
+        let config = FiberConfig {
+            stack_size: 512 * 1024,        // Standard stack size
+            initial_pool_size: 32,         // Moderate initial pool
+            target_pool_size: 256,         // Allow growth
+            frame_stack_size: 1024 * 1024, // Standard frame allocator
+            prefetch_pages: false,
+        };
+
+        JobSystem {
+            worker_pool: WorkerPool::new_with_strategy(
+                num_cpus,
+                crate::PinningStrategy::Linear,
+                config,
+            ),
+        }
+    }
+
+    /// Creates a job system optimized for low-latency workloads.
+    ///
+    /// Uses minimal pools and CCD isolation for reduced jitter.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::for_low_latency();
+    /// ```
+    pub fn for_low_latency() -> Self {
+        let num_cpus = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        let config = FiberConfig {
+            stack_size: 128 * 1024,       // Small stacks for fast switching
+            initial_pool_size: 8,         // Small initial pool
+            target_pool_size: 64,         // Limited growth
+            frame_stack_size: 512 * 1024, // Smaller frame allocator
+            prefetch_pages: false,
+        };
+
+        JobSystem {
+            worker_pool: WorkerPool::new_with_strategy(
+                num_cpus,
+                crate::PinningStrategy::CCDIsolation,
+                config,
+            ),
+        }
     }
 
     /// Submits a job to be executed by the worker pool.
@@ -678,125 +887,183 @@ mod tests {
         assert_eq!(executed.load(Ordering::SeqCst), 1);
         job_system.shutdown().expect("Shutdown failed");
     }
+}
 
-    #[test]
-    fn test_job_system_multiple_jobs() {
-        let job_system = JobSystem::new(4);
-        let executed = Arc::new(AtomicUsize::new(0));
+#[test]
+fn test_job_system_multiple_jobs() {
+    let job_system = JobSystem::new(4);
+    let executed = Arc::new(AtomicUsize::new(0));
 
-        let num_jobs = 10;
-        let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
+    let num_jobs = 10;
+    let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
 
-        for _ in 0..num_jobs {
-            let executed_clone = executed.clone();
-            jobs.push(Box::new(move || {
-                executed_clone.fetch_add(1, Ordering::SeqCst);
-            }));
-        }
-
-        let counter = job_system.run_multiple(jobs);
-        job_system.wait_for_counter(&counter);
-
-        assert_eq!(executed.load(Ordering::SeqCst), num_jobs);
-        job_system.shutdown().expect("Shutdown failed");
+    for _ in 0..num_jobs {
+        let executed_clone = executed.clone();
+        jobs.push(Box::new(move || {
+            executed_clone.fetch_add(1, Ordering::SeqCst);
+        }));
     }
 
-    #[test]
-    fn test_job_system_nested_jobs() {
-        let job_system = JobSystem::new(4);
-        let result = Arc::new(AtomicUsize::new(0));
+    let counter = job_system.run_multiple(jobs);
+    job_system.wait_for_counter(&counter);
 
-        let result_clone = result.clone();
-        let counter = job_system.run(move || {
-            // Simulate nested job submission
+    assert_eq!(executed.load(Ordering::SeqCst), num_jobs);
+    job_system.shutdown().expect("Shutdown failed");
+}
+
+#[test]
+fn test_job_system_nested_jobs() {
+    let job_system = JobSystem::new(4);
+    let result = Arc::new(AtomicUsize::new(0));
+
+    let result_clone = result.clone();
+    let counter = job_system.run(move || {
+        // Simulate nested job submission
+        result_clone.fetch_add(1, Ordering::SeqCst);
+
+        // In a real system, this would submit more jobs
+        for _ in 0..5 {
             result_clone.fetch_add(1, Ordering::SeqCst);
+        }
+    });
 
-            // In a real system, this would submit more jobs
-            for _ in 0..5 {
-                result_clone.fetch_add(1, Ordering::SeqCst);
-            }
-        });
+    job_system.wait_for_counter(&counter);
+    assert_eq!(result.load(Ordering::SeqCst), 6);
+    job_system.shutdown().expect("Shutdown failed");
+}
 
-        job_system.wait_for_counter(&counter);
-        assert_eq!(result.load(Ordering::SeqCst), 6);
-        job_system.shutdown().expect("Shutdown failed");
-    }
+#[test]
+fn test_parallel_for() {
+    let job_system = JobSystem::new(4);
+    let len = 1000;
+    let data = Arc::new(AtomicUsize::new(0));
+    let data_clone = data.clone();
 
-    #[test]
-    fn test_parallel_for() {
-        let job_system = JobSystem::new(4);
-        let len = 1000;
-        let data = Arc::new(AtomicUsize::new(0));
-        let data_clone = data.clone();
+    let counter = job_system.parallel_for(0..len, 100, move |_idx| {
+        data_clone.fetch_add(1, Ordering::Relaxed);
+    });
 
-        let counter = job_system.parallel_for(0..len, 100, move |_idx| {
-            data_clone.fetch_add(1, Ordering::Relaxed);
-        });
+    job_system.wait_for_counter(&counter);
+    assert_eq!(data.load(Ordering::Relaxed), len);
+    job_system.shutdown().expect("Shutdown failed");
+}
 
-        job_system.wait_for_counter(&counter);
-        assert_eq!(data.load(Ordering::Relaxed), len);
-        job_system.shutdown().expect("Shutdown failed");
-    }
+#[test]
+fn test_parallel_for_auto() {
+    let job_system = JobSystem::new(4);
+    let len = 10000;
+    let data = Arc::new(AtomicUsize::new(0));
+    let data_clone = data.clone();
 
-    #[test]
-    fn test_parallel_for_auto() {
-        let job_system = JobSystem::new(4);
-        let len = 10000;
-        let data = Arc::new(AtomicUsize::new(0));
-        let data_clone = data.clone();
+    let counter = job_system.parallel_for_auto(0..len, move |_idx| {
+        data_clone.fetch_add(1, Ordering::Relaxed);
+    });
 
-        let counter = job_system.parallel_for_auto(0..len, move |_idx| {
-            data_clone.fetch_add(1, Ordering::Relaxed);
-        });
+    job_system.wait_for_counter(&counter);
+    assert_eq!(data.load(Ordering::Relaxed), len);
+    job_system.shutdown().expect("Shutdown failed");
+}
 
-        job_system.wait_for_counter(&counter);
-        assert_eq!(data.load(Ordering::Relaxed), len);
-        job_system.shutdown().expect("Shutdown failed");
-    }
+#[test]
+fn test_parallel_for_uneven() {
+    let job_system = JobSystem::new(4);
+    let len = 105;
+    let data = Arc::new(AtomicUsize::new(0));
+    let data_clone = data.clone();
 
-    #[test]
-    fn test_parallel_for_uneven() {
-        let job_system = JobSystem::new(4);
-        let len = 105;
-        let data = Arc::new(AtomicUsize::new(0));
-        let data_clone = data.clone();
+    // Batch size 10 means 10 chunks of 10 and 1 chunk of 5
+    let counter = job_system.parallel_for(0..len, 10, move |_idx| {
+        data_clone.fetch_add(1, Ordering::Relaxed);
+    });
 
-        // Batch size 10 means 10 chunks of 10 and 1 chunk of 5
-        let counter = job_system.parallel_for(0..len, 10, move |_idx| {
-            data_clone.fetch_add(1, Ordering::Relaxed);
-        });
+    job_system.wait_for_counter(&counter);
+    assert_eq!(data.load(Ordering::Relaxed), len);
+    job_system.shutdown().expect("Shutdown failed");
+}
 
-        job_system.wait_for_counter(&counter);
-        assert_eq!(data.load(Ordering::Relaxed), len);
-        job_system.shutdown().expect("Shutdown failed");
-    }
+#[test]
+fn test_shutdown_success() {
+    let job_system = JobSystem::new(2);
 
-    #[test]
-    fn test_shutdown_success() {
-        let job_system = JobSystem::new(2);
+    // Submit a normal job
+    let counter = job_system.run(|| {
+        // Normal job
+    });
 
-        // Submit a normal job
-        let counter = job_system.run(|| {
-            // Normal job
-        });
+    job_system.wait_for_counter(&counter);
 
-        job_system.wait_for_counter(&counter);
+    // Shutdown should succeed
+    let result = job_system.shutdown();
+    assert!(result.is_ok());
+}
 
-        // Shutdown should succeed
-        let result = job_system.shutdown();
-        assert!(result.is_ok());
-    }
+#[test]
+fn test_error_types_and_display() {
+    // Test JobSystemError display
+    let error = JobSystemError::WorkerPanic { count: 3 };
+    assert_eq!(format!("{}", error), "3 worker thread(s) panicked");
 
-    #[test]
-    fn test_error_types_and_display() {
-        // Test JobSystemError display
-        let error = JobSystemError::WorkerPanic { count: 3 };
-        assert_eq!(format!("{}", error), "3 worker thread(s) panicked");
+    let timeout_error = JobSystemError::ShutdownTimeout;
+    assert_eq!(format!("{}", timeout_error), "shutdown timed out");
 
-        let timeout_error = JobSystemError::ShutdownTimeout;
-        assert_eq!(format!("{}", timeout_error), "shutdown timed out");
+    // Test that errors implement std::error::Error
+    let _: &dyn std::error::Error = &error;
+}
 
-        // Test that errors implement std::error::Error
-        let _: &dyn std::error::Error = &error;
-    }
+#[test]
+fn test_job_system_builder() {
+    let job_system = JobSystemBuilder::new()
+        .thread_count(4)
+        .stack_size(128 * 1024)
+        .initial_pool_size(16)
+        .pinning_strategy(PinningStrategy::None)
+        .build();
+
+    assert_eq!(job_system.num_workers(), 4);
+    job_system.shutdown().expect("Shutdown failed");
+}
+
+#[test]
+fn test_job_system_builder_defaults() {
+    let job_system = JobSystemBuilder::new().build();
+    // Should use available_parallelism for thread count
+    let expected_threads = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    assert_eq!(job_system.num_workers(), expected_threads);
+    job_system.shutdown().expect("Shutdown failed");
+}
+
+#[test]
+fn test_preset_constructors() {
+    // Test gaming preset
+    let gaming_system = JobSystem::for_gaming();
+    assert!(gaming_system.num_workers() >= 4); // At least some cores
+    gaming_system.shutdown().expect("Shutdown failed");
+
+    // Test data processing preset
+    let data_system = JobSystem::for_data_processing();
+    assert!(data_system.num_workers() >= 4);
+    data_system.shutdown().expect("Shutdown failed");
+
+    // Test low latency preset
+    let latency_system = JobSystem::for_low_latency();
+    assert!(latency_system.num_workers() >= 2);
+    latency_system.shutdown().expect("Shutdown failed");
+}
+
+#[test]
+fn test_preset_functionality() {
+    // Test that presets actually work by running a simple job
+    let job_system = JobSystem::for_gaming();
+    let executed = Arc::new(AtomicUsize::new(0));
+    let executed_clone = executed.clone();
+
+    let counter = job_system.run(move || {
+        executed_clone.fetch_add(1, Ordering::SeqCst);
+    });
+
+    job_system.wait_for_counter(&counter);
+    assert_eq!(executed.load(Ordering::SeqCst), 1);
+    job_system.shutdown().expect("Shutdown failed");
 }
