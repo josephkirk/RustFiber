@@ -26,6 +26,56 @@ pub enum WorkerPoolError {
     WorkerPanic { failed_count: usize },
 }
 
+/// Global parking mechanism for worker threads.
+/// uses a Condition Variable to block idle threads and wake them up when work arrives.
+pub(crate) struct GlobalParker {
+    lock: std::sync::Mutex<()>,
+    cvar: std::sync::Condvar,
+    sleepers: AtomicUsize,
+}
+
+impl GlobalParker {
+    pub(crate) fn new() -> Self {
+        Self {
+            lock: std::sync::Mutex::new(()),
+            cvar: std::sync::Condvar::new(),
+            sleepers: AtomicUsize::new(0),
+        }
+    }
+
+    /// Blocks the current thread until notified.
+    pub(crate) fn park(&self) {
+        let mut guard = self.lock.lock().unwrap();
+        self.sleepers.fetch_add(1, Ordering::SeqCst);
+        // We put the thread to sleep.
+        // Note: We might experience spurious wakeups, which is fine; the worker will just check for work and sleep again.
+        // We use wait_timeout to prevent deadlocks (lost wakeups) due to race conditions between
+        // checking `sleepers` count and actually parking. A 1ms timeout is sufficient responsiveness backup.
+        let _result = self.cvar.wait_timeout(guard, std::time::Duration::from_millis(1)).unwrap();
+        self.sleepers.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Wakes up *one* sleeping thread, if any are sleeping.
+    pub(crate) fn wake_one(&self) {
+        // Optimization: Only notify if we know someone is sleeping.
+        // We use Relaxed or Acquire/Release for the check depending on strictness needed,
+        // but SeqCst is safest for now to ensure we see the increment from `park`.
+        if self.sleepers.load(Ordering::SeqCst) > 0 {
+            // We notify while holding the lock? 
+            // Ideally avoid holding lock while notifying to prevent "hurry up and wait" but Condvar::notify_one doesn't require lock.
+            // Just notify.
+            self.cvar.notify_one();
+        }
+    }
+
+    /// Wakes up *all* sleeping threads.
+    pub(crate) fn wake_all(&self) {
+        if self.sleepers.load(Ordering::SeqCst) > 0 {
+            self.cvar.notify_all();
+        }
+    }
+}
+
 // Thread-Local Storage for the worker's FrameAllocator
 thread_local! {
     static ACTIVE_ALLOCATOR: Cell<Option<*mut FrameAllocator>> = const { Cell::new(None) };
@@ -87,6 +137,7 @@ pub(crate) struct WorkerParams {
     pub(crate) fiber_config: crate::job_system::FiberConfig,
     pub(crate) frame_index: Arc<CachePadded<AtomicU64>>,
     pub(crate) topology: Arc<crate::topology::Topology>,
+    pub(crate) parker: Arc<GlobalParker>,
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Option<Arc<crate::metrics::Metrics>>,
 }
@@ -133,6 +184,7 @@ impl Worker {
             fiber_config,
             frame_index,
             topology,
+            parker,
             core_id: _,
             #[cfg(feature = "metrics")]
             metrics,
@@ -199,6 +251,8 @@ impl Worker {
         // Initialize RNG for randomized back-off
         // We use SmallRng for performance as we might call it frequently in the idle loop
         let mut rng = rand::rngs::SmallRng::from_rng(&mut rand::rng());
+
+
 
         // Track local frame index to detect changes
         let mut local_frame_index = frame_index.load(Ordering::Relaxed);
@@ -383,7 +437,7 @@ impl Worker {
                             let job = Job {
                                 work,
                                 counter,
-                                priority,
+                                 priority,
                             };
 
                             // Use local queue as scheduler for immediate wakeup locality if strategy permits
@@ -448,7 +502,9 @@ impl Worker {
                                                 metrics.global_injector_pushes.fetch_add(1, Ordering::Relaxed);
                                             }
                                             injector.push(job);
-                                        }
+                                         }
+                                         // Signal potential sleepers that global work is available
+                                         parker.wake_one();
                                     }
                                     _ => {
                                         // Keep local for other strategies
@@ -457,6 +513,8 @@ impl Worker {
                                             metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
                                         }
                                         local_queue.push(job);
+                                        // Signal potential sleepers that *local* work is available (which can be stolen)
+                                        parker.wake_one();
                                     }
                                 }
                             }
@@ -494,15 +552,16 @@ impl Worker {
                             continue;
                         }
 
-                        // Deep Idle: Randomized Back-off
+                        // Deep Idle: Signal-based Parking
                         // Mitigation for "Thundering Herd": When multiple workers are idle and contending
                         // for the same empty victims, we must desynchronize them.
-                        // We spin/yield a random number of times before resetting the backoff.
-                        let backoff_loops = rng.random_range(1..=5);
-                        for _ in 0..backoff_loops {
-                            thread::yield_now();
-                        }
                         
+                        // Parking Strategy:
+                        // - Instead of spinning or sleeping blindly, we park the thread (block).
+                        // - Threads are woken up by `notify_one` when new work is pushed.
+                        // - This eliminates "Empty Attempts" almost entirely as workers only wake when work exists.
+                        
+                        parker.park();
                         backoff.reset();
                     } else {
                         // Brief Idle: Spin or yield
@@ -536,6 +595,7 @@ pub struct WorkerPool {
     shutdown: Arc<CachePadded<AtomicBool>>,
     active_workers: Arc<CachePadded<AtomicUsize>>,
     frame_index: Arc<CachePadded<AtomicU64>>,
+    parker: Arc<GlobalParker>,
     // _fiber_pool: Arc<FiberPool>, // Removed as it is now thread-local
 }
 
@@ -577,6 +637,7 @@ impl WorkerPool {
         let active_workers = Arc::new(CachePadded::new(AtomicUsize::new(0)));
         let frame_index = Arc::new(CachePadded::new(AtomicU64::new(0)));
         let topology = Arc::new(crate::topology::Topology::detect());
+        let parker = Arc::new(GlobalParker::new());
 
         // We no longer create a global FiberPool here.
         // It is created lazily in each worker thread.
@@ -677,6 +738,7 @@ impl WorkerPool {
                 fiber_config: config.clone(),
                 frame_index: Arc::clone(&frame_index),
                 topology: Arc::clone(&topology),
+                parker: Arc::clone(&parker),
                 #[cfg(feature = "metrics")]
                 metrics: metrics.as_ref().map(Arc::clone),
             }));
@@ -689,6 +751,7 @@ impl WorkerPool {
             shutdown,
             active_workers,
             frame_index,
+            parker,
             // _fiber_pool: fiber_pool, // Removed
         }
     }
@@ -710,13 +773,15 @@ impl WorkerPool {
         } else {
             self.injector.push(job);
         }
+        self.parker.wake_one();
     }
 
     /// Submits multiple jobs in a batch to reduce contention.
     pub fn submit_batch(&self, jobs: Vec<Job>) {
+        if jobs.is_empty() { return; }
         // We could optimize this by splitting batch, but for now simple iteration is fine
         for job in jobs {
-            self.submit(job);
+            self.submit(job); // `submit` calls wake_one, might be slightly inefficient (lock contention) but robust
         }
     }
 
