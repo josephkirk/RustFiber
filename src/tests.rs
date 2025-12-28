@@ -90,3 +90,87 @@ fn test_high_throughput() {
     assert!(counter.is_complete());
     job_system.shutdown().expect("Shutdown failed");
 }
+#[test]
+fn test_yield_fairness() {
+    let job_system = JobSystem::new(2);
+    // Use an atomic log to track order/interleaving
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let log1 = log.clone();
+    let job1 = job_system.run(move || {
+        for _ in 0..5 {
+            log1.lock().unwrap().push(1);
+            // This yield should allow job2 to run if on same thread,
+            // or just be a no-op if on different threads.
+            // But we want to test that it doesn't block forever.
+            crate::context::yield_now();
+        }
+    });
+
+    let log2 = log.clone();
+    let job2 = job_system.run(move || {
+        for _ in 0..5 {
+            log2.lock().unwrap().push(2);
+            crate::context::yield_now();
+        }
+    });
+
+    job_system.wait_for_counter(&job1);
+    job_system.wait_for_counter(&job2);
+
+    let final_log = log.lock().unwrap();
+    assert_eq!(final_log.len(), 10);
+    // We expect some mixing, though exact interleaving depends on thread scheduling.
+    // At least ensure it completed.
+
+    job_system.shutdown().expect("Shutdown failed");
+}
+
+#[test]
+fn test_priority_scheduling() {
+    // Single thread to force serialization and simpler priority check
+    let job_system = JobSystem::new(1);
+    let execution_order = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    // We want to fill the worker with a long running job, then submit Low, then High.
+    // The High should technically run before Low when the long job yields or finishes?
+    // Actually, getting deterministic priority order in a concurrent system is hard.
+    // But with 1 thread, if we submit Low then High, and the worker picks up High first
+    // (if neither has started), that proves priority.
+
+    // However, submit() pushes to queue. Normal injector is FIFO-ish.
+    // If we push Low (injector) then High (high_priority_injector).
+    // The worker loop checks High before Injector.
+
+    // Pause the worker for a moment to let us submit both
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let barrier_clone = barrier.clone();
+
+    // Occupy the worker
+    let c_block = job_system.run(move || {
+        barrier_clone.wait(); // Wait for main thread to submit others
+        thread::sleep(Duration::from_millis(50)); // Give time for submission
+    });
+
+    barrier.wait(); // Worker is now running c_block
+
+    let order1 = execution_order.clone();
+    let c_low = job_system.run_priority(crate::job::JobPriority::Low, move || {
+        order1.lock().unwrap().push("Low");
+    });
+
+    let order2 = execution_order.clone();
+    let c_high = job_system.run_priority(crate::job::JobPriority::High, move || {
+        order2.lock().unwrap().push("High");
+    });
+
+    job_system.wait_for_counter(&c_block);
+    job_system.wait_for_counter(&c_low);
+    job_system.wait_for_counter(&c_high);
+
+    let final_order = execution_order.lock().unwrap();
+    // High should run before Low because Worker checks high_priority_injector first
+    assert_eq!(*final_order, vec!["High", "Low"]);
+
+    job_system.shutdown().expect("Shutdown failed");
+}

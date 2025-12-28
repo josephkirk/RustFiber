@@ -74,6 +74,15 @@ Different pinning strategies require different scheduling logic.
     - **Linear / AvoidSMT**: Uses **Local Queue** for rescheduled fibers. Preserves CPU affinity.
     - **TieredSpillover**: Uses **Global Injector** for rescheduled fibers. Ensures dormant threads (Tier 2/3) can pick up spillover work.
 
+### 4.4 Configurable Stack & Job Priorities
+Different workloads require different resource guarantees.
+- **Fiber Configuration**: `FiberConfig` allows tuning of stack sizes (default 512KB) and initial pool sizes to match application memory constraints.
+- **Job Priorities**:
+    - **High**: Critical path tasks (physics, audio). Checked first by workers.
+    - **Normal**: Standard logic.
+    - **Low**: Background tasks.
+    - **Scheduling**: High-priority jobs utilize a dedicated global injector and are prioritized during work stealing and yielding. In `TieredSpillover`, yielded High-priority fibers are immediately pushed to the high-priority global injector to wake up available workers.
+
 ---
 
 ## 5. Performance

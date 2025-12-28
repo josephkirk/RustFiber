@@ -34,16 +34,23 @@ impl<'a> Context<'a> {
     }
 
     /// Yields execution to allow other work to run.
-    /// Yields execution to allow other work to run.
     pub fn yield_now(&self) {
-        use crate::fiber::YieldType;
-        if Fiber::current().is_some() {
-            // Suspend execution and request rescheduling
-            Fiber::yield_now(YieldType::Normal);
-        } else {
-            // Fallback for non-fiber threads
-            std::thread::yield_now();
-        }
+        yield_now();
+    }
+}
+
+/// Yields execution to allow other work to run.
+///
+/// If called from within a fiber, yields the fiber.
+/// If called from a thread, yields the thread.
+pub fn yield_now() {
+    use crate::fiber::YieldType;
+    if Fiber::current().is_some() {
+        // Suspend execution and request rescheduling
+        Fiber::yield_now(YieldType::Normal);
+    } else {
+        // Fallback for non-fiber threads
+        std::thread::yield_now();
     }
 }
 
