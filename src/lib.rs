@@ -84,7 +84,7 @@
 //! let job_system = JobSystem::new(8);
 //! let completed_count = Arc::new(AtomicUsize::new(0));
 //!
-//! let root = job_system.run_with_context(|ctx| {
+//! let root = job_system.run_with_context(move |ctx| {
 //!     for _ in 0..10_000 {
 //!         let c = completed_count.clone();
 //!         // No Counter returned, no heap allocation, extremely fast!
