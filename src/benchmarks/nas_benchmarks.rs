@@ -117,7 +117,11 @@ fn run_cg_benchmark(job_system: &JobSystem, matrix_size: usize, threads: usize) 
     start.elapsed().as_secs_f64() * 1000.0
 }
 
-pub fn run_nas_ep_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
+pub fn run_nas_ep_benchmark(
+    job_system: &JobSystem,
+    strategy: PinningStrategy,
+    threads: usize,
+) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4a: NAS EP (Embarrassingly Parallel) ===");
 
     let system_info = SystemInfo::collect(strategy, threads);
@@ -125,10 +129,6 @@ pub fn run_nas_ep_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
-
-    let job_system = JobSystem::new_with_strategy(threads, strategy);
-    // Cold start prevention
-    std::thread::sleep(std::time::Duration::from_millis(20));
 
     let ep_sizes = vec![10_000, 25_000, 50_000, 100_000, 200_000];
     let mut data_points = Vec::new();
@@ -146,15 +146,13 @@ pub fn run_nas_ep_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
             break;
         }
         eprintln!("Testing EP with {} tasks...", size);
-        let elapsed_ms = run_ep_benchmark(&job_system, size);
+        let elapsed_ms = run_ep_benchmark(job_system, size);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
         data_points.push(DataPoint {
             num_tasks: size,
             time_ms: elapsed_ms,
         });
     }
-
-    job_system.shutdown().ok();
 
     BenchmarkResult {
         name: "Benchmark 4a: NAS EP (Embarrassingly Parallel)".to_string(),
@@ -166,7 +164,11 @@ pub fn run_nas_ep_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
     }
 }
 
-pub fn run_nas_mg_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
+pub fn run_nas_mg_benchmark(
+    job_system: &JobSystem,
+    strategy: PinningStrategy,
+    threads: usize,
+) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4b: NAS MG (Multi-Grid) ===");
 
     let system_info = SystemInfo::collect(strategy, threads);
@@ -174,11 +176,6 @@ pub fn run_nas_mg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
-
-    // Use specific strategy
-    let job_system = JobSystem::new_with_strategy(threads, strategy);
-    // Cold start prevention
-    std::thread::sleep(std::time::Duration::from_millis(20));
 
     // Warmup: Ensure all threads are started and have allocated local resources
     // This prevents "Cold Start" latency (memory allocation) from skewing the first benchmark data point.
@@ -206,15 +203,13 @@ pub fn run_nas_mg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
             break;
         }
         eprintln!("Testing MG with {}x{} grid...", size, size);
-        let elapsed_ms = run_mg_benchmark(&job_system, size, threads);
+        let elapsed_ms = run_mg_benchmark(job_system, size, threads);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
         data_points.push(DataPoint {
             num_tasks: size,
             time_ms: elapsed_ms,
         });
     }
-
-    job_system.shutdown().ok();
 
     BenchmarkResult {
         name: "Benchmark 4b: NAS MG (Multi-Grid)".to_string(),
@@ -226,7 +221,11 @@ pub fn run_nas_mg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
     }
 }
 
-pub fn run_nas_cg_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
+pub fn run_nas_cg_benchmark(
+    job_system: &JobSystem,
+    strategy: PinningStrategy,
+    threads: usize,
+) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 4c: NAS CG (Conjugate Gradient) ===");
 
     let system_info = SystemInfo::collect(strategy, threads);
@@ -234,10 +233,6 @@ pub fn run_nas_cg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
         "System: {} CPU cores, {:.2} GB total RAM, Strategy: {:?}",
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
-
-    let job_system = JobSystem::new_with_strategy(threads, strategy);
-    // Cold start prevention
-    std::thread::sleep(std::time::Duration::from_millis(20));
 
     let cg_sizes = vec![10_000, 25_000, 50_000, 100_000];
     let mut data_points = Vec::new();
@@ -255,15 +250,13 @@ pub fn run_nas_cg_benchmark(strategy: PinningStrategy, threads: usize) -> Benchm
             break;
         }
         eprintln!("Testing CG with matrix size {}...", size);
-        let elapsed_ms = run_cg_benchmark(&job_system, size, threads);
+        let elapsed_ms = run_cg_benchmark(job_system, size, threads);
         eprintln!("  Completed in {:.2} ms", elapsed_ms);
         data_points.push(DataPoint {
             num_tasks: size,
             time_ms: elapsed_ms,
         });
     }
-
-    job_system.shutdown().ok();
 
     BenchmarkResult {
         name: "Benchmark 4c: NAS CG (Conjugate Gradient)".to_string(),

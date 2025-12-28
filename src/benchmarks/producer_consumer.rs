@@ -9,6 +9,7 @@ use std::time::Instant;
 /// This tests the pure throughput of the job system and fiber switching
 /// without being bottlenecked by global mutex contention.
 pub fn run_producer_consumer_benchmark(
+    job_system: &JobSystem,
     strategy: PinningStrategy,
     threads: usize,
 ) -> BenchmarkResult {
@@ -20,11 +21,7 @@ pub fn run_producer_consumer_benchmark(
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new_with_strategy(threads, strategy);
-    // Cold start prevention
-    std::thread::sleep(std::time::Duration::from_millis(20));
-
-    let test_sizes = vec![10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000];
+    let test_sizes = vec![100, 1_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000];
 
     let mut data_points = Vec::new();
     let mut timed_out = false;
@@ -123,8 +120,6 @@ pub fn run_producer_consumer_benchmark(
             time_ms: elapsed_ms,
         });
     }
-
-    job_system.shutdown().ok();
 
     BenchmarkResult {
         name: "Benchmark 3: Producer-Consumer (Lock-Free)".to_string(),

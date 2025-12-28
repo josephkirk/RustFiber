@@ -81,10 +81,6 @@ impl Default for WaitNode {
     }
 }
 
-use corosensei::ScopedCoroutine;
-/// Represents a fiber - a lightweight stackful execution context.
-///
-/// Uses `corosensei` for context switching.
 use corosensei::stack::DefaultStack;
 
 /// Represents a fiber - a lightweight stackful execution context.
@@ -95,8 +91,7 @@ pub struct Fiber {
     /// 'static lifetime is a lie to make it self-referential safe in this context,
     /// as we promise not to drop stack while coroutine exists.
     /// Drop order: coroutine drops first, then stack.
-    coroutine:
-        Option<ScopedCoroutine<'static, FiberInput, YieldType, (), &'static mut DefaultStack>>,
+    coroutine: Option<Coroutine<FiberInput, YieldType, (), &'static mut DefaultStack>>,
 
     /// The stack backing the coroutine.
     /// Owned here to allow reuse.

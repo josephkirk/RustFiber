@@ -2,12 +2,13 @@ use super::utils::{BenchmarkResult, DataPoint, SystemInfo};
 use rustfiber::{JobSystem, PinningStrategy};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-pub fn run_allocation_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
-    let system = JobSystem::new_with_strategy(threads, strategy);
-    // Cold start prevention: Wait for OS to stabilize worker threads
-    std::thread::sleep(Duration::from_millis(20));
+pub fn run_allocation_benchmark(
+    system: &JobSystem,
+    strategy: PinningStrategy,
+    threads: usize,
+) -> BenchmarkResult {
     let system_info = SystemInfo::collect(strategy, threads);
 
     eprintln!("\n=== Allocation Throughput Benchmark ===");
@@ -17,17 +18,16 @@ pub fn run_allocation_benchmark(strategy: PinningStrategy, threads: usize) -> Be
     );
 
     let test_sizes = vec![
-        10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000, 750_000, 1_000_000,
+        100, 1_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000, 750_000, 1_000_000,
     ];
 
-    // Warmup
-    let root = system.run_with_context(|_ctx| {
-        for _ in 0..10_000 {
-            let _ = rustfiber::Job::new(|| {});
-        }
-    });
-    system.wait_for_counter(&root);
-    std::thread::sleep(Duration::from_millis(5));
+    // Warmup: Local allocation priming
+    // let root = system.run_with_context(|_ctx| {
+    //     for _ in 0..10_000 {
+    //         let _ = rustfiber::Job::new(|| {});
+    //     }
+    // });
+    // system.wait_for_counter(&root);
 
     let mut data_points = Vec::new();
     let mut timed_out = false;
@@ -76,18 +76,16 @@ pub fn run_allocation_benchmark(strategy: PinningStrategy, threads: usize) -> Be
         let duration_ms = (duration_ns as f64) / 1_000_000.0;
 
         eprintln!(
-            "  Completed in {:.2} ms ({:.2} items/sec)",
+            "  Completed in {:.2} ms ({:.2} ns/item)",
             duration_ms,
-            (count as f64) / ((duration_ns as f64) / 1_000_000_000.0)
+            (duration_ns as f64) / (count as f64)
         );
 
         data_points.push(DataPoint {
             num_tasks: count,
-            time_ms: duration_ms, // We hijack this, or use Python to convert
+            time_ms: duration_ms,
         });
     }
-
-    system.shutdown().unwrap();
 
     BenchmarkResult {
         name: "Allocation Throughput".to_string(),

@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-pub fn run_batching_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
-    let job_system = JobSystem::new_with_strategy(threads, strategy);
-    // Cold start prevention
-    std::thread::sleep(std::time::Duration::from_millis(20));
+pub fn run_batching_benchmark(
+    job_system: &JobSystem,
+    strategy: PinningStrategy,
+    threads: usize,
+) -> BenchmarkResult {
     let system_info = crate::utils::SystemInfo::collect(strategy, threads);
 
     eprintln!("\n=== Parallel For Batching Benchmark ===");
@@ -17,7 +18,7 @@ pub fn run_batching_benchmark(strategy: PinningStrategy, threads: usize) -> Benc
     );
 
     let test_sizes = vec![
-        10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000, 750_000, 1_000_000,
+       100, 1000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000, 750_000, 1_000_000,
     ];
 
     let mut data_points = Vec::new();
@@ -94,8 +95,6 @@ pub fn run_batching_benchmark(strategy: PinningStrategy, threads: usize) -> Benc
             time_ms: elapsed_ms,
         });
     }
-
-    job_system.shutdown().unwrap();
 
     BenchmarkResult {
         name: "Batching (Parallel For Auto)".to_string(),

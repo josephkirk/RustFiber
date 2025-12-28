@@ -18,7 +18,11 @@ fn fibonacci(n: u64) -> u64 {
     b
 }
 
-pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> BenchmarkResult {
+pub fn run_fibonacci_benchmark(
+    job_system: &JobSystem,
+    strategy: PinningStrategy,
+    threads: usize,
+) -> BenchmarkResult {
     eprintln!("\n=== Benchmark 1: Million Tiny Tasks (Fibonacci) ===");
 
     let system_info = SystemInfo::collect(strategy, threads);
@@ -27,12 +31,8 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let job_system = JobSystem::new_with_strategy(threads, strategy);
-    // Cold start prevention: Wait for OS to stabilize worker threads
-    std::thread::sleep(std::time::Duration::from_millis(20));
-
-    // Warmup: Ensure all threads are started and have allocated local resources
-    eprintln!("Warming up workers...");
+    // Local Warmup: Ensure all threads are started and have allocated local resources
+    eprintln!("Warming up workers locally...");
     let warmup_jobs: Vec<Box<dyn FnOnce() + Send>> = (0..threads * 4)
         .map(|_| Box::new(|| {}) as Box<dyn FnOnce() + Send>)
         .collect();
@@ -96,8 +96,6 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
             time_ms: elapsed_ms,
         });
     }
-
-    job_system.shutdown().ok();
 
     BenchmarkResult {
         name: "Benchmark 1: Million Tiny Tasks (Fibonacci)".to_string(),
