@@ -27,6 +27,11 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Spawns a single job and returns a `Counter` to track its completion.
+    ///
+    /// This method is convenient for simple dependencies but incurs an allocation
+    /// for the `Counter`. For High-Performance scenarios with many small jobs,
+    /// consider using `spawn_detached` or `spawn_with_counter`.
     pub fn spawn_job<F>(&self, work: F) -> Counter
     where
         F: FnOnce(&Context) + Send + 'static,
@@ -94,6 +99,10 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Spawns multiple jobs from an iterator.
+    ///
+    /// Returns a single `Counter` which signals when ALL spawned jobs are complete.
+    /// Note: This method currently heap-allocates the jobs (Box) due to iterator types.
     pub fn spawn_jobs<I>(&self, jobs: I) -> Counter
     where
         I: IntoIterator<Item = Box<dyn FnOnce(&Context) + Send + 'static>>,
@@ -104,6 +113,10 @@ impl<'a> Context<'a> {
         self.job_system.run_multiple_with_context(jobs)
     }
 
+    /// Suspends the current fiber until the specified counter reaches zero.
+    ///
+    /// This is a non-blocking operation from the perspective of the worker thread.
+    /// The fiber yields execution, allowing the worker to process other jobs in the meantime.
     pub fn wait_for(&self, counter: &Counter) {
         self.job_system.wait_for_counter(counter)
     }

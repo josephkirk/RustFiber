@@ -8,14 +8,27 @@
 //! ## Architecture
 //!
 //! The system follows an M:N threading model where M fibers are multiplexed onto
-//! N hardware threads (worker threads). Key components include:
+//! N hardware threads (worker threads).
 //!
-//! - **Fibers**: Lightweight execution contexts that can be suspended and resumed
-//! - **Job Queue**: Thread-safe queue for pending work units
-//! - **Counters**: Synchronization primitives for tracking job completion
-//! - **Worker Threads**: OS threads that execute fibers from the job queue
+//! ### Key Components
 //!
-//! ## Example
+//! - **Fibers**: Lightweight execution contexts (coroutines) that can be suspended and resumed.
+//!   Switching fibers is a user-space operation (nanoseconds) vs OS thread switching (microseconds).
+//! - **Work Stealing**: Uses a Chase-Lev deque for load balancing.
+//!   - **Local Queue (LIFO)**: Hot tasks are pushed/popped locally for cache locality.
+//!   - **Stealing (FIFO)**: Idle workers steal cold tasks from the top of other workers' queues.
+//! - **Lock-Free Synchronization**: Dependencies are tracked via `Counter`s.
+//!   Waiting on a counter adds the fiber to a wait-list and yields execution, freeing the
+//!   worker to run other jobs immediately.
+//! - **Frame Allocator**: Each fiber possesses a linear bump-allocator for temporary allocations.
+//!   This enables **Zero-Allocation** job spawning, where closures are allocated on the stack/bump-ptr
+//!   without `malloc`/`free` overhead.
+//!
+//! ## Examples
+//!
+//! ### 1. Basic Usage
+//!
+//! Fire and forget a job and wait for it.
 //!
 //! ```no_run
 //! use rustfiber::JobSystem;
@@ -27,6 +40,91 @@
 //! });
 //!
 //! job_system.wait_for_counter(&counter);
+//! ```
+//!
+//! ### 2. Nested Parallelism (Divide & Conquer)
+//!
+//! Use `run_with_context` to spawn child jobs. This is the primary pattern for
+//! parallel algorithms like Ray Tracing, QuickSort, or Entity Updates.
+//!
+//! ```no_run
+//! use rustfiber::JobSystem;
+//!
+//! let job_system = JobSystem::new(4);
+//!
+//! let root = job_system.run_with_context(|ctx| {
+//!     // Spawn 10 child jobs
+//!     let mut children = vec![];
+//!     for i in 0..10 {
+//!         let counter = ctx.spawn_job(move |_| {
+//!             println!("Processing chunk {}", i);
+//!         });
+//!         children.push(counter);
+//!     }
+//!
+//!     // Wait for all children to complete
+//!     for child in children {
+//!         ctx.wait_for(&child);
+//!     }
+//! });
+//!
+//! job_system.wait_for_counter(&root);
+//! ```
+//!
+//! ### 3. Zero-Allocation "Fire-and-Forget"
+//!
+//! For massive numbers of tiny tasks (e.g., 100,000 particles), managing individual counters is too heavy.
+//! Use `spawn_detached` to fire tasks with zero allocation overhead.
+//!
+//! ```no_run
+//! use rustfiber::JobSystem;
+//! use std::sync::atomic::{AtomicUsize, Ordering};
+//! use std::sync::Arc;
+//!
+//! let job_system = JobSystem::new(8);
+//! let completed_count = Arc::new(AtomicUsize::new(0));
+//!
+//! let root = job_system.run_with_context(|ctx| {
+//!     for _ in 0..10_000 {
+//!         let c = completed_count.clone();
+//!         // No Counter returned, no heap allocation, extremely fast!
+//!         ctx.spawn_detached(move |_| {
+//!             // Do work...
+//!             c.fetch_add(1, Ordering::Relaxed);
+//!         });
+//!     }
+//! });
+//!
+//! job_system.wait_for_counter(&root);
+//! // Note: 'root' implies spawning finished, but detached jobs might still be running.
+//! // Use an external atomic or a shared Group Counter (see below) to track completion.
+//! ```
+//!
+//! ### 4. Shared Counter (Task Groups)
+//!
+//! To track a group of jobs without allocating a counter for each one, use `spawn_with_counter`.
+//!
+//! ```no_run
+//! use rustfiber::{JobSystem, Counter};
+//!
+//! let job_system = JobSystem::new(4);
+//!
+//! let root = job_system.run_with_context(|ctx| {
+//!     // Create a counter for 100 jobs
+//!     let group = Counter::new(100);
+//!
+//!     for _ in 0..100 {
+//!         // All jobs share the same counter (auto-decremented on completion)
+//!         ctx.spawn_with_counter(|_| {
+//!             // Work...
+//!         }, group.clone());
+//!     }
+//!
+//!     // Efficiently wait for the entire group
+//!     ctx.wait_for(&group);
+//! });
+//!
+//! job_system.wait_for_counter(&root);
 //! ```
 
 pub mod allocator;
