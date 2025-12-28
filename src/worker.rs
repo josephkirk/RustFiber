@@ -321,7 +321,19 @@ impl Worker {
                 }
                 None => {
                     // No work available
+                    // No work available
                     if backoff.is_completed() {
+                        // Pre-warming Layer:
+                        // If the fiber pool is below the target size, incrementally allocate one fiber.
+                        // This allows for "Interleaved Pre-warning" where the pool grows during idle cycles
+                        // rather than stalling the thread at startup.
+                        if fiber_pool.len() < fiber_config.target_pool_size {
+                            fiber_pool.grow(1);
+                            // Reset backoff to check for work again immediately (allocation counts as work)
+                            backoff.reset();
+                            continue;
+                        }
+
                         // Deep Idle: Release SMT resources completely for a short while
                         thread::sleep(std::time::Duration::from_micros(100));
                         backoff.reset();
