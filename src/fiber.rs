@@ -4,6 +4,7 @@
 //! allowing them to yield execution without blocking the OS thread.
 
 use crate::job::Job;
+use crate::allocator::linear::FrameAllocator;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 
 use std::cell::UnsafeCell;
@@ -31,8 +32,12 @@ pub const NODE_STATE_WAITING: u32 = 1;
 pub const NODE_STATE_SIGNALED: u32 = 2;
 pub const NODE_STATE_SPINNING: u32 = 3;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AllocatorPtr(pub *mut FrameAllocator);
+unsafe impl Send for AllocatorPtr {}
+
 pub enum FiberInput {
-    Start(Job, *const dyn crate::counter::JobScheduler, *mut Fiber),
+    Start(Job, *const dyn crate::counter::JobScheduler, *mut Fiber, Option<AllocatorPtr>),
     Resume,
 }
 
@@ -126,7 +131,7 @@ impl Fiber {
         };
 
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr) = input {
+            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper) = input {
                 // Initialize yielder pointer in the Fiber struct.
                 // SAFETY: fiber_ptr is valid and pinned (Boxed in pool).
                 unsafe {
@@ -135,7 +140,8 @@ impl Fiber {
                     // Execute the job using the provided scheduler
                     // SAFETY: The scheduler reference is pinned/valid for the job execution.
                     let scheduler = &*scheduler_ptr;
-                    job.execute(scheduler);
+                    let allocator = allocator_wrapper.map(|w| w.0);
+                    job.execute(scheduler, allocator);
                 }
             } else {
                 // Logic error: effectively a no-op or panic
@@ -187,14 +193,15 @@ impl Fiber {
         };
 
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr) = input {
+            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper) = input {
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;
                 }
 
                 // SAFETY: scheduler_ptr is valid
                 let scheduler = unsafe { &*scheduler_ptr };
-                job.execute(scheduler);
+                let allocator = allocator_wrapper.map(|w| w.0);
+                job.execute(scheduler, allocator);
             }
         });
 
