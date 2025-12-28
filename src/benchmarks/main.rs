@@ -46,8 +46,8 @@ fn main() {
     let job_system =
         std::sync::Arc::new(rustfiber::JobSystem::new_with_strategy(threads, strategy));
 
-    // eprintln!("[STARTUP] Waiting 20ms for OS thread stabilization...");
-    // std::thread::sleep(std::time::Duration::from_millis(20));
+    eprintln!("[STARTUP] Waiting 20ms for OS thread stabilization...");
+    std::thread::sleep(std::time::Duration::from_millis(20));
 
     eprintln!("[STARTUP] Performing global first-touch warmup...");
     let warmup_counter = job_system.parallel_for_chunked_auto(0..1_000_000, |_| {

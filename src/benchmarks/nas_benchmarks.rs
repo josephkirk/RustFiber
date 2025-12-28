@@ -1,7 +1,7 @@
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo};
 use rustfiber::{JobSystem, PinningStrategy};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 // Embarrassingly Parallel (EP) - Pure throughput test with zero communication
@@ -36,25 +36,21 @@ fn run_ep_benchmark(job_system: &JobSystem, num_tasks: usize) -> f64 {
 
 // Multi-Grid (MG) - Tests communication and memory bandwidth
 fn run_mg_benchmark(job_system: &JobSystem, grid_size: usize, threads: usize) -> f64 {
-    // Use a vector of per-chunk grids to reduce lock contention
+    // Use separate grids for each chunk to eliminate mutex contention
     let num_chunks = threads;
     let rows_per_chunk = grid_size / num_chunks;
 
-    // Each chunk gets its own grid section to reduce lock contention
-    let grids: Vec<_> = (0..num_chunks)
-        .map(|_| Arc::new(Mutex::new(vec![vec![0.0; grid_size]; rows_per_chunk + 2])))
-        .collect();
-
     let start = Instant::now();
 
-    // Simulate multi-grid operations with reduced communication
+    // Create independent jobs, each with its own grid
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-    for grid_clone in grids.iter().take(num_chunks) {
-        let grid_clone = grid_clone.clone();
+    for _ in 0..num_chunks {
+        // Each job gets its own grid - no sharing, no mutexes
+        let mut local_grid = vec![vec![0.0; grid_size]; rows_per_chunk + 2];
+
         jobs.push(Box::new(move || {
-            // Simulate stencil operations on local grid section
+            // Simulate stencil operations on local grid
             for _ in 0..10 {
-                let mut local_grid = grid_clone.lock().unwrap();
                 let local_size = local_grid.len();
                 for i in 1..local_size - 1 {
                     for j in 1..grid_size - 1 {
@@ -67,6 +63,8 @@ fn run_mg_benchmark(job_system: &JobSystem, grid_size: usize, threads: usize) ->
                     }
                 }
             }
+            // Prevent optimization of unused result
+            std::hint::black_box(local_grid);
         }));
     }
 
@@ -78,9 +76,6 @@ fn run_mg_benchmark(job_system: &JobSystem, grid_size: usize, threads: usize) ->
 
 // Conjugate Gradient (CG) - Tests irregular memory access
 fn run_cg_benchmark(job_system: &JobSystem, matrix_size: usize, threads: usize) -> f64 {
-    let vector = Arc::new(Mutex::new(vec![1.0; matrix_size]));
-    let result = Arc::new(Mutex::new(vec![0.0; matrix_size]));
-
     let start = Instant::now();
 
     // Simulate sparse matrix-vector multiplication with irregular access
@@ -89,25 +84,25 @@ fn run_cg_benchmark(job_system: &JobSystem, matrix_size: usize, threads: usize) 
 
     let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
     for chunk in 0..num_chunks {
-        let vector_clone = vector.clone();
-        let result_clone = result.clone();
+        // Each job gets its own copy of input and output - no sharing
+        let input_vec = vec![1.0; matrix_size];
+        let mut output_vec = vec![0.0; chunk_size];
 
         jobs.push(Box::new(move || {
             let start_idx = chunk * chunk_size;
             let end_idx = ((chunk + 1) * chunk_size).min(matrix_size);
 
-            let vec = vector_clone.lock().unwrap();
-            let mut res = result_clone.lock().unwrap();
-
             // Irregular memory access pattern
-            for i in start_idx..end_idx {
+            for (local_i, i) in (start_idx..end_idx).enumerate() {
                 let mut sum = 0.0;
                 // Simulate sparse matrix access
                 for j in (i.saturating_sub(5)..=(i + 5).min(matrix_size - 1)).step_by(2) {
-                    sum += vec[j] * ((i + j) as f64 * 0.01);
+                    sum += input_vec[j] * ((i + j) as f64 * 0.01);
                 }
-                res[i] = sum;
+                output_vec[local_i] = sum;
             }
+            // Prevent optimization of unused result
+            std::hint::black_box(output_vec);
         }));
     }
 
@@ -130,7 +125,9 @@ pub fn run_nas_ep_benchmark(
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let ep_sizes = vec![10_000, 25_000, 50_000, 100_000, 200_000];
+    let ep_sizes = vec![
+        1, 10, 100, 1_000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000, 1_000_000,
+    ];
     let mut data_points = Vec::new();
     let mut timed_out = false;
     let total_start = Instant::now();
@@ -147,7 +144,11 @@ pub fn run_nas_ep_benchmark(
         }
         eprintln!("Testing EP with {} tasks...", size);
         let elapsed_ms = run_ep_benchmark(job_system, size);
-        eprintln!("  Completed in {:.2} ms", elapsed_ms);
+        eprintln!(
+            "  Completed in {:.2} ms ({:.2} ns/item)",
+            elapsed_ms,
+            (elapsed_ms * 1_000_000.0) / (size as f64)
+        );
         data_points.push(DataPoint {
             num_tasks: size,
             time_ms: elapsed_ms,
@@ -177,17 +178,7 @@ pub fn run_nas_mg_benchmark(
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    // Warmup: Ensure all threads are started and have allocated local resources
-    // This prevents "Cold Start" latency (memory allocation) from skewing the first benchmark data point.
-    eprintln!("Warming up workers...");
-    let warmup_jobs: Vec<Box<dyn FnOnce() + Send>> =
-        (0..threads * 4) // submit enough to wake everyone
-            .map(|_| Box::new(|| {}) as Box<dyn FnOnce() + Send>)
-            .collect();
-    let counter = job_system.run_multiple(warmup_jobs);
-    job_system.wait_for_counter(&counter);
-
-    let mg_sizes = vec![50, 100, 150, 200, 250, 300];
+    let mg_sizes = vec![16, 32, 64, 128, 256, 512, 1024];
     let mut data_points = Vec::new();
     let mut timed_out = false;
     let total_start = Instant::now();
@@ -234,7 +225,7 @@ pub fn run_nas_cg_benchmark(
         system_info.cpu_cores, system_info.total_memory_gb, strategy
     );
 
-    let cg_sizes = vec![10_000, 25_000, 50_000, 100_000];
+    let cg_sizes = vec![1_020_000, 10_050, 250_001, 50_000, 100_000];
     let mut data_points = Vec::new();
     let mut timed_out = false;
     let total_start = Instant::now();

@@ -93,13 +93,14 @@ fn test_high_throughput() {
 #[test]
 fn test_yield_fairness() {
     let job_system = JobSystem::new(2);
-    // Use an atomic log to track order/interleaving
-    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    // Use atomic counters to track completion without mutexes
+    let counter1 = Arc::new(AtomicUsize::new(0));
+    let counter2 = Arc::new(AtomicUsize::new(0));
 
-    let log1 = log.clone();
+    let counter1_clone = counter1.clone();
     let job1 = job_system.run(move || {
         for _ in 0..5 {
-            log1.lock().unwrap().push(1);
+            counter1_clone.fetch_add(1, Ordering::SeqCst);
             // This yield should allow job2 to run if on same thread,
             // or just be a no-op if on different threads.
             // But we want to test that it doesn't block forever.
@@ -107,10 +108,10 @@ fn test_yield_fairness() {
         }
     });
 
-    let log2 = log.clone();
+    let counter2_clone = counter2.clone();
     let job2 = job_system.run(move || {
         for _ in 0..5 {
-            log2.lock().unwrap().push(2);
+            counter2_clone.fetch_add(1, Ordering::SeqCst);
             crate::context::yield_now();
         }
     });
@@ -118,10 +119,9 @@ fn test_yield_fairness() {
     job_system.wait_for_counter(&job1);
     job_system.wait_for_counter(&job2);
 
-    let final_log = log.lock().unwrap();
-    assert_eq!(final_log.len(), 10);
-    // We expect some mixing, though exact interleaving depends on thread scheduling.
-    // At least ensure it completed.
+    assert_eq!(counter1.load(Ordering::SeqCst), 5);
+    assert_eq!(counter2.load(Ordering::SeqCst), 5);
+    // Both jobs completed their loops with yields
 
     job_system.shutdown().expect("Shutdown failed");
 }

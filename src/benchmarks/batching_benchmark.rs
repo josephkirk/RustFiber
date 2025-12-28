@@ -18,7 +18,8 @@ pub fn run_batching_benchmark(
     );
 
     let test_sizes = vec![
-        100, 1000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000, 750_000, 1_000_000,
+        1, 100, 1000, 10_000, 25_000, 50_000, 100_000, 200_000, 300_000, 500_000, 750_000,
+        1_000_000,
     ];
 
     let mut data_points = Vec::new();
@@ -42,12 +43,12 @@ pub fn run_batching_benchmark(
         b
     }
     // Warmup: Run a large batching task to ensure all workers are awake and hot
-    eprintln!("Warming up workers with batching...");
-    let warmup_counter = job_system.parallel_for_chunked_auto(0..100_000, |_| {
-        std::hint::black_box(());
-    });
-    job_system.wait_for_counter(&warmup_counter);
-    std::thread::sleep(std::time::Duration::from_millis(5)); // Brief settle
+    // eprintln!("Warming up workers with batching...");
+    // let warmup_counter = job_system.parallel_for_chunked_auto(0..100_000, |_| {
+    //     std::hint::black_box(());
+    // });
+    // job_system.wait_for_counter(&warmup_counter);
+    // std::thread::sleep(std::time::Duration::from_millis(5)); // Brief settle
 
     for &num_items in &test_sizes {
         if total_start.elapsed() > timeout_duration {
