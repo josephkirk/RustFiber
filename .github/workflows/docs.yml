@@ -3,6 +3,9 @@ name: Deploy Documentation
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
   workflow_dispatch:
 
 permissions:
