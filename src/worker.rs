@@ -11,7 +11,7 @@ use crate::fiber_pool::FiberPool;
 use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
-use crossbeam::utils::Backoff;
+use crossbeam::utils::{Backoff, CachePadded};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
@@ -29,15 +29,15 @@ pub(crate) struct WorkerParams {
     pub(crate) stealers: Arc<Vec<Stealer<Job>>>,
     pub(crate) injector: Arc<Injector<Job>>,
     pub(crate) high_priority_injector: Arc<Injector<Job>>,
-    pub(crate) shutdown: Arc<AtomicBool>,
-    pub(crate) active_workers: Arc<AtomicUsize>,
+    pub(crate) shutdown: Arc<CachePadded<AtomicBool>>,
+    pub(crate) active_workers: Arc<CachePadded<AtomicUsize>>,
     pub(crate) fiber_pool: Arc<FiberPool>,
     pub(crate) tier: u32,
     pub(crate) threshold: usize,
     pub(crate) core_id: Option<CoreId>,
     pub(crate) strategy: PinningStrategy,
     pub(crate) allocator: FrameAllocator,
-    pub(crate) frame_index: Arc<AtomicU64>,
+    pub(crate) frame_index: Arc<CachePadded<AtomicU64>>,
 }
 
 impl Worker {
@@ -312,9 +312,9 @@ pub struct WorkerPool {
     workers: Vec<Worker>,
     injector: Arc<Injector<Job>>,
     high_priority_injector: Arc<Injector<Job>>,
-    shutdown: Arc<AtomicBool>,
-    active_workers: Arc<AtomicUsize>,
-    frame_index: Arc<AtomicU64>,
+    shutdown: Arc<CachePadded<AtomicBool>>,
+    active_workers: Arc<CachePadded<AtomicUsize>>,
+    frame_index: Arc<CachePadded<AtomicU64>>,
     _fiber_pool: Arc<FiberPool>,
 }
 
@@ -349,9 +349,9 @@ impl WorkerPool {
     ) -> Self {
         let injector = Arc::new(Injector::new());
         let high_priority_injector = Arc::new(Injector::new());
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let active_workers = Arc::new(AtomicUsize::new(0));
-        let frame_index = Arc::new(AtomicU64::new(0));
+        let shutdown = Arc::new(CachePadded::new(AtomicBool::new(false)));
+        let active_workers = Arc::new(CachePadded::new(AtomicUsize::new(0)));
+        let frame_index = Arc::new(CachePadded::new(AtomicU64::new(0)));
 
         let fiber_pool = Arc::new(FiberPool::new(
             config.initial_pool_size * num_threads,

@@ -22,6 +22,7 @@ impl JobScheduler for Worker<Job> {
     }
 }
 
+#[repr(align(128))]
 struct InnerCounter {
     value: AtomicUsize,
     wait_list: AtomicPtr<WaitNode>,
@@ -226,5 +227,13 @@ mod tests {
         let counter = Counter::new(10);
         counter.reset(5);
         assert_eq!(counter.value(), 5);
+    }
+
+    #[test]
+    fn test_inner_counter_alignment() {
+        assert!(
+            std::mem::align_of::<InnerCounter>() >= 128,
+            "InnerCounter not aligned to 128"
+        );
     }
 }

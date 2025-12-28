@@ -95,7 +95,14 @@ We introduced specialized spawn methods to eliminate remaining overheads:
 - **`spawn_with_counter`**: Allows thousands of jobs to share a single `Counter` (via `Arc`), reducing atomic hardware synchronization traffic.
 - **Local Queue Submission**: Jobs spawned from within a fiber are pushed directly to the worker's **Lock-Free Local Queue** (LIFO), bypassing the Global Injector lock entirely.
 
+### 4.7 Cache Alignment & False Sharing Mitigation
+To ensure scalability on high-core-count systems (e.g., Threadripper, EPYC), we aggressively manage data layout to prevent **false sharing**.
+- **`InnerCounter`**: Aligned to **128 bytes** (`#[repr(align(128))]`). This ensures that `Counter` objects, even when allocated consecutively in memory (common in loops), reside on distinct cache lines. The 128-byte alignment also effectively pads the surrounding `Arc` control block.
+- **`WaitNode`**: Aligned to **64 bytes** (`#[repr(C, align(64))]`). Since these nodes are often stack-allocated or pooled, alignment prevents adjacent nodes from sharing cache lines during high-contention wakeups.
+- **Global State**: Hot global atomics in the `Worker` (`active_workers`, `shutdown`, `frame_index`) are padded using `crossbeam::utils::CachePadded`. This prevents Read-Write false sharing where a worker updating `active_workers` could invalidate the cache line containing `shutdown` or `frame_index` for all other workers.
+
 ---
+
 
 ## 5. Performance
 

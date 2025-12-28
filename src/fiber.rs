@@ -61,7 +61,7 @@ pub enum YieldType {
 
 /// The node embedded in every Fiber for intrusive lists.
 /// Must be 'repr(C)' for stable pointer offsets.
-#[repr(C)]
+#[repr(C, align(64))]
 pub struct WaitNode {
     /// Atomic pointer to the next node in the list.
     pub next: AtomicPtr<WaitNode>,
@@ -263,3 +263,16 @@ impl Fiber {
 }
 
 unsafe impl Send for Fiber {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wait_node_alignment() {
+        assert!(
+            std::mem::align_of::<WaitNode>() >= 64,
+            "WaitNode not aligned to 64"
+        );
+    }
+}
