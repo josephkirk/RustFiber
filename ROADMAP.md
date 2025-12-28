@@ -8,10 +8,6 @@
 - **Benefit**: Faster context switching and reduced cache pollution from translation misses.
 - **Reference**: Investigated in v0.2 but deferred due to `corosensei` stack trait complexity.
 
-### Topology-Aware Allocator
-- **Goal**: Ensure all job-related allocations (box, closure captures) are strictly local.
-- **Plan**: Integrate a per-worker memory arena (bump pointer) more deeply into `Job` struct creation to avoid `Global` allocator entirely.
-
 ### Hardware Topology Refinement
 - **Goal**: Support >64 core systems (Windows Processor Groups).
 - **Plan**: Integrate `hwloc` or advanced Windows APIs to handle processor groups correctly, as `sysinfo` flattens them.

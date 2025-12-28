@@ -48,9 +48,7 @@ pub fn with_current_allocator<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut FrameAllocator) -> R,
 {
-    ACTIVE_ALLOCATOR.with(|tls| {
-        tls.get().map(|ptr| unsafe { f(&mut *ptr) })
-    })
+    ACTIVE_ALLOCATOR.with(|tls| tls.get().map(|ptr| unsafe { f(&mut *ptr) }))
 }
 
 /// Returns a raw pointer to the current thread's frame allocator, if active.

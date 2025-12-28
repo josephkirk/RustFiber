@@ -11,6 +11,7 @@ This directory contains benchmark scripts that test the RustFiber job system wit
    - EP (Embarrassingly Parallel) - Pure throughput with zero communication
    - MG (Multi-Grid) - Communication and memory bandwidth
    - CG (Conjugate Gradient) - Irregular memory access patterns
+5. **Allocation Throughput** - Baseline test of the `FrameAllocator` and `Job::new` logic, measuring raw per-task allocation cost (~10ns/job).
 
 ## Running Benchmarks
 
@@ -81,9 +82,9 @@ These graphs show how performance scales from 1 to 32 cores.
 |--------|--------|
 | ![NAS MG Cores](docs/comparison_cores_benchmark_4b_nas_mg_multi-grid.png) | ![NAS CG Cores](docs/comparison_cores_benchmark_4c_nas_cg_conjugate_gradient.png) |
 
-| Batching (Parallel For) |
-|-------------------------|
-| ![Batching Cores](docs/comparison_cores_batching_parallel_for_auto.png) |
+| Batching (Parallel For) | Allocation Throughput |
+|-------------------------|-----------------------|
+| ![Batching Cores](docs/comparison_cores_batching_parallel_for_auto.png) | ![Allocation Cores](docs/comparison_cores_allocation_throughput.png) |
 
 ### Strategy Efficiency Comparison (32 Cores)
 These graphs compare different pinning strategies on a multi-core system.
@@ -100,9 +101,16 @@ These graphs compare different pinning strategies on a multi-core system.
 |--------|--------|
 | ![NAS MG Strategies](docs/comparison_strategies_benchmark_4b_nas_mg_multi-grid.png) | ![NAS CG Strategies](docs/comparison_strategies_benchmark_4c_nas_cg_conjugate_gradient.png) |
 
-| Batching (Parallel For) |
-|-------------------------|
-| ![Batching Strategies](docs/comparison_strategies_batching_parallel_for_auto.png) |
+| Batching (Parallel For) | Allocation Throughput |
+|-------------------------|-----------------------|
+| ![Batching Strategies](docs/comparison_strategies_batching_parallel_for_auto.png) | ![Allocation Strategies](docs/comparison_strategies_allocation_throughput.png) |
+
+## Scaling Analysis (ns/task)
+RustFiber now uses **Nanoseconds per Task/Item** as its primary performance metric for most benchmarks. 
+
+*   **O(1) Visualization**: A perfectly horizontal line on these graphs indicates that the work system has zero scaling overhead—the cost of a millionth task is identical to the first.
+*   **Zero-Based Y-Axis**: All scaling graphs are forced to start at `0ns`. This provides a non-deceptive view of whether the system overhead is small relative to the work.
+*   **Amortized Overhead**: Small task sizes (1,000 and 5,000) are excluded from the results. At these scales, constant overheads like root job submission dominate the metric, creating $1/n$ noise that obscures the actual runtime efficiency.
 
 ## Batching (Parallel For) Performance
 The "Batching" benchmark tests the `parallel_for_chunked` API.
@@ -111,12 +119,12 @@ The "Batching" benchmark tests the `parallel_for_chunked` API.
 *   **Optimization**: Critically, it allows **Batch-Local Accumulation**, reducing atomic synchronization from 1,000,000 ops to just ~128 ops.
 *   **Result**: Linear scaling up to memory bandwidth limits (>1B items/sec effective throughput).
 
-## Understanding Startup Latency
-Users may observe a fixed **~4-5ms** overhead at the start of benchmarks (especially linear ones).
-- **Cause**: "First-Touch" initialization where `FiberPool` pre-allocates stacks (64MB/thread).
-- **Interpretation**: This is **not runtime overhead**. It is a one-time startup cost.
-- **Verification**: Benchmarks include a "Warmup" phase to separate this initialization from the actual performance metrics.
-- See [Startup Analysis](docs/startup_analysis.md) for a full breakdown.
+## Warmup & Cold-Start Prevention
+To ensure measurements reflect the high-frequency steady state of the job system, the following optimizations are applied:
+
+- **OS Settle Period**: Each benchmark waits **20ms** after initializing the `JobSystem`. This allows worker threads, core affinity masks, and CPU frequency scaling to stabilize.
+- **Substantial Warmup**: A massive parallel task (e.g., 100,000 items) is executed before recording. This primes the `FrameAllocator` arenas and wakes up all worker fibers.
+- **Worker-Local Measurement**: Benchmarks like "Allocation Throughput" measure the **inner worker loop duration** directly via atomics, ensuring high-level scheduling overhead does not skew the raw per-task performance data.
 
 ## Requirements
 
