@@ -36,8 +36,18 @@ pub const NODE_STATE_SPINNING: u32 = 3;
 pub struct AllocatorPtr(pub *mut FrameAllocator);
 unsafe impl Send for AllocatorPtr {}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueuePtr(pub *const crossbeam::deque::Worker<Job>);
+unsafe impl Send for QueuePtr {}
+
 pub enum FiberInput {
-    Start(Job, *const dyn crate::counter::JobScheduler, *mut Fiber, Option<AllocatorPtr>),
+    Start(
+        Job,
+        *const dyn crate::counter::JobScheduler,
+        *mut Fiber,
+        Option<AllocatorPtr>,
+        Option<QueuePtr>,
+    ),
     Resume,
 }
 
@@ -131,7 +141,9 @@ impl Fiber {
         };
 
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper) = input {
+            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper, queue_wrapper) =
+                input
+            {
                 // Initialize yielder pointer in the Fiber struct.
                 // SAFETY: fiber_ptr is valid and pinned (Boxed in pool).
                 unsafe {
@@ -141,7 +153,8 @@ impl Fiber {
                     // SAFETY: The scheduler reference is pinned/valid for the job execution.
                     let scheduler = &*scheduler_ptr;
                     let allocator = allocator_wrapper.map(|w| w.0);
-                    job.execute(scheduler, allocator);
+                    let queue = queue_wrapper.map(|w| w.0);
+                    job.execute(scheduler, allocator, queue);
                 }
             } else {
                 // Logic error: effectively a no-op or panic
@@ -193,7 +206,9 @@ impl Fiber {
         };
 
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper) = input {
+            if let FiberInput::Start(job, scheduler_ptr, fiber_ptr, allocator_wrapper, queue_wrapper) =
+                input
+            {
                 unsafe {
                     (*fiber_ptr).yielder = yielder as *const _;
                 }
@@ -201,7 +216,8 @@ impl Fiber {
                 // SAFETY: scheduler_ptr is valid
                 let scheduler = unsafe { &*scheduler_ptr };
                 let allocator = allocator_wrapper.map(|w| w.0);
-                job.execute(scheduler, allocator);
+                let queue = queue_wrapper.map(|w| w.0);
+                job.execute(scheduler, allocator, queue);
             }
         });
 

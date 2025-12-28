@@ -5,7 +5,7 @@
 //! fibers (jobs) are multiplexed onto a fixed number of worker threads.
 
 use crate::PinningStrategy;
-use crate::fiber::{FiberInput, FiberState, AllocatorPtr};
+use crate::fiber::{FiberInput, FiberState, AllocatorPtr, QueuePtr};
 use crate::fiber_pool::FiberPool;
 use crate::job::Job;
 use crate::allocator::linear::FrameAllocator;
@@ -209,7 +209,16 @@ impl Worker {
                                 scheduler as *const dyn crate::counter::JobScheduler;
 
                             let fiber_ptr = fiber.as_mut() as *mut crate::fiber::Fiber;
-                            (fiber, FiberInput::Start(job, scheduler_ptr, fiber_ptr, Some(AllocatorPtr(&mut allocator))))
+                            (
+                                fiber,
+                                FiberInput::Start(
+                                    job,
+                                    scheduler_ptr,
+                                    fiber_ptr,
+                                    Some(AllocatorPtr(&mut allocator)),
+                                    Some(QueuePtr(&local_queue)),
+                                ),
+                            )
                         }
                     };
 

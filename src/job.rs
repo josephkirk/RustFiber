@@ -7,6 +7,7 @@ use crate::context::Context;
 use crate::counter::Counter;
 use crate::fiber::FiberHandle;
 use crate::allocator::linear::FrameAllocator;
+use crossbeam::deque::Worker;
 
 // Helper struct to wrap pointers and implement Send
 #[derive(Debug)]
@@ -239,7 +240,13 @@ impl Job {
     /// Executes the job and decrements its counter if present.
     ///
     /// Accepts an optional allocator to supply to the Context for nested allocations.
-    pub fn execute(self, scheduler: &dyn crate::counter::JobScheduler, allocator: Option<*mut FrameAllocator>) {
+    /// Accepts an optional local queue for optimized nesting.
+    pub fn execute(
+        self,
+        scheduler: &dyn crate::counter::JobScheduler,
+        allocator: Option<*mut FrameAllocator>,
+        queue: Option<*const Worker<Job>>,
+    ) {
         use crate::counter::CounterGuard;
 
         // Create the RAII guard for the counter if one exists.
@@ -265,8 +272,7 @@ impl Job {
 
                 unsafe {
                     let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
-                    let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
-                    let context = Context::new(job_system, allocator);
+                    let context = Context::new(job_system, allocator, queue);
                     work(&context);
                 }
             }
@@ -278,7 +284,7 @@ impl Job {
             Work::WithContextFrame { func, data, job_system_ptr } => {
                  unsafe {
                     let job_system = &*(job_system_ptr as *const crate::job_system::JobSystem);
-                    let context = Context::new(job_system, allocator);
+                    let context = Context::new(job_system, allocator, queue);
                     (func)(data.0, &context);
                 }
             }
@@ -310,7 +316,7 @@ mod tests {
 
         let injector = Injector::new();
         // Pass injector as scheduler
-        job.execute(&injector, None);
+        job.execute(&injector, None, None);
         assert!(executed.load(Ordering::SeqCst));
     }
 
@@ -328,7 +334,7 @@ mod tests {
 
         assert_eq!(counter.value(), 1);
         let injector = Injector::new();
-        job.execute(&injector, None);
+        job.execute(&injector, None, None);
 
         // Note: Decrement logic requires valid injector if waiters exist.
         // Here no waiters, so safe.

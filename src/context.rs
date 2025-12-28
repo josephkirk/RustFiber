@@ -3,22 +3,27 @@
 use crate::counter::Counter;
 use crate::fiber::Fiber;
 use crate::job_system::JobSystem;
-// use crate::job::Job;
-
 use crate::allocator::linear::FrameAllocator;
-use crate::job::SendPtr;
+use crate::job::{Job, SendPtr};
+use crossbeam::deque::Worker;
 
 /// Context provided to jobs for accessing fiber system capabilities.
 pub struct Context<'a> {
     job_system: &'a JobSystem,
     allocator: Option<SendPtr<FrameAllocator>>,
+    local_queue: Option<SendPtr<Worker<Job>>>,
 }
 
 impl<'a> Context<'a> {
-    pub(crate) fn new(job_system: &'a JobSystem, allocator: Option<*mut FrameAllocator>) -> Self {
+    pub(crate) fn new(
+        job_system: &'a JobSystem,
+        allocator: Option<*mut FrameAllocator>,
+        local_queue: Option<*const Worker<Job>>,
+    ) -> Self {
         Context {
             job_system,
             allocator: allocator.map(|p| SendPtr(p)),
+            local_queue: local_queue.map(|p| SendPtr(p as *mut _)),
         }
     }
 
@@ -51,7 +56,17 @@ impl<'a> Context<'a> {
             crate::job::Job::with_counter_and_context(work, counter_clone, job_system_ptr)
         };
 
-        self.job_system.submit_to_injector(job);
+        if let Some(queue) = self.local_queue {
+            // Push to local queue (Lock-free)
+            // SAFETY: The worker and its queue are guaranteed to alive while the context is processing jobs.
+            // Queue access is thread-safe for push (owner) and steal (concurrent).
+            unsafe {
+                (*queue.0).push(job);
+            }
+        } else {
+            // Fallback to global injector (Lock contention)
+            self.job_system.submit_to_injector(job);
+        }
         counter
     }
 
