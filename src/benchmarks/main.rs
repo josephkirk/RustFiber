@@ -46,7 +46,7 @@ fn main() {
     eprintln!("with 4 different stress tests:\n");
     eprintln!("1. Million Tiny Tasks (Fibonacci)");
     eprintln!("2. Recursive Task Decomposition (QuickSort)");
-    eprintln!("3. Producer-Consumer Stress Test");
+    eprintln!("3. Producer-Consumer (Lock-Free)");
     eprintln!("4. NAS Parallel Benchmarks (EP, MG, CG)");
     eprintln!("\n=======================================================\n");
 

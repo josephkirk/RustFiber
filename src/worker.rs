@@ -5,14 +5,15 @@
 //! fibers (jobs) are multiplexed onto a fixed number of worker threads.
 
 use crate::PinningStrategy;
-use crate::fiber::{FiberInput, FiberState};
+use crate::allocator::linear::FrameAllocator;
+use crate::fiber::{AllocatorPtr, FiberInput, FiberState, QueuePtr};
 use crate::fiber_pool::FiberPool;
 use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use crossbeam::utils::Backoff;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
 /// A worker thread that executes jobs from a queue.
@@ -35,6 +36,8 @@ pub(crate) struct WorkerParams {
     pub(crate) threshold: usize,
     pub(crate) core_id: Option<CoreId>,
     pub(crate) strategy: PinningStrategy,
+    pub(crate) allocator: FrameAllocator,
+    pub(crate) frame_index: Arc<AtomicU64>,
 }
 
 impl Worker {
@@ -72,16 +75,33 @@ impl Worker {
             tier,
             threshold,
             strategy,
+            mut allocator,
+            frame_index,
             ..
         } = params;
 
         // Init backoff outside the loop so it persists across iterations
         let backoff = Backoff::new();
 
+        // Track local frame index to detect changes
+        let mut local_frame_index = frame_index.load(Ordering::Relaxed);
+
         loop {
             // Check for shutdown signal
             if shutdown.load(Ordering::Relaxed) {
                 break;
+            }
+
+            // Frame Reset Logic
+            let global_frame_index = frame_index.load(Ordering::Relaxed);
+            if global_frame_index > local_frame_index {
+                // New frame detected, reset allocator
+                // SAFETY: We assume the user guarantees all jobs from the previous frame are done
+                // before incrementing the frame index.
+                unsafe {
+                    allocator.reset();
+                }
+                local_frame_index = global_frame_index;
             }
 
             // Tiered Spillover Logic: Stay dormant if load is below threshold
@@ -191,7 +211,16 @@ impl Worker {
                                 scheduler as *const dyn crate::counter::JobScheduler;
 
                             let fiber_ptr = fiber.as_mut() as *mut crate::fiber::Fiber;
-                            (fiber, FiberInput::Start(job, scheduler_ptr, fiber_ptr))
+                            (
+                                fiber,
+                                FiberInput::Start(
+                                    job,
+                                    scheduler_ptr,
+                                    fiber_ptr,
+                                    Some(AllocatorPtr(&mut allocator)),
+                                    Some(QueuePtr(&local_queue)),
+                                ),
+                            )
                         }
                     };
 
@@ -285,6 +314,7 @@ pub struct WorkerPool {
     high_priority_injector: Arc<Injector<Job>>,
     shutdown: Arc<AtomicBool>,
     active_workers: Arc<AtomicUsize>,
+    frame_index: Arc<AtomicU64>,
     _fiber_pool: Arc<FiberPool>,
 }
 
@@ -321,6 +351,7 @@ impl WorkerPool {
         let high_priority_injector = Arc::new(Injector::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let active_workers = Arc::new(AtomicUsize::new(0));
+        let frame_index = Arc::new(AtomicU64::new(0));
 
         let fiber_pool = Arc::new(FiberPool::new(
             config.initial_pool_size * num_threads,
@@ -418,6 +449,8 @@ impl WorkerPool {
                 tier: tiers[id],
                 threshold: thresholds[id],
                 strategy,
+                allocator: FrameAllocator::new(config.frame_stack_size),
+                frame_index: Arc::clone(&frame_index),
             }));
         }
 
@@ -427,8 +460,19 @@ impl WorkerPool {
             high_priority_injector,
             shutdown,
             active_workers,
+            frame_index,
             _fiber_pool: fiber_pool,
         }
+    }
+
+    /// Signals the start of a new frame, triggering allocator resets on workers.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure no jobs are currently running or pending that reference
+    /// frame-allocated memory.
+    pub fn start_new_frame(&self) {
+        self.frame_index.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Submits a single job to the scheduling system.

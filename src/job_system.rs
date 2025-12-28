@@ -17,6 +17,8 @@ pub struct FiberConfig {
     pub stack_size: usize,
     /// Initial number of fibers to pre-allocate per worker. Default: 128.
     pub initial_pool_size: usize,
+    /// Size of the per-worker frame allocator in bytes. Default: 1MB.
+    pub frame_stack_size: usize,
 }
 
 impl Default for FiberConfig {
@@ -24,6 +26,7 @@ impl Default for FiberConfig {
         Self {
             stack_size: 512 * 1024,
             initial_pool_size: 128,
+            frame_stack_size: 1024 * 1024,
         }
     }
 }
@@ -248,7 +251,7 @@ impl JobSystem {
         let counter_clone = counter.clone();
 
         let job_system_ptr = self as *const JobSystem as usize;
-        let job = Job::with_counter_and_context(work, counter_clone, job_system_ptr);
+        let job = Job::with_counter_and_context(work, Some(counter_clone), job_system_ptr);
 
         self.worker_pool.submit(job);
 
@@ -288,7 +291,7 @@ impl JobSystem {
             .into_iter()
             .map(|work| {
                 let counter_clone = counter.clone();
-                Job::with_counter_and_context(work, counter_clone, job_system_ptr)
+                Job::with_counter_and_context(work, Some(counter_clone), job_system_ptr)
             })
             .collect();
 
@@ -438,6 +441,19 @@ impl JobSystem {
     /// Returns the number of currently active workers.
     pub fn active_workers(&self) -> usize {
         self.worker_pool.active_count()
+    }
+
+    /// Signals the start of a new frame.
+    ///
+    /// This triggers a reset of all worker frame allocators.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that all jobs allocated in the previous frame
+    /// have completed. Calling this while frame-allocated jobs are running
+    /// or pending will lead to undefined behavior (use-after-free).
+    pub fn start_new_frame(&self) {
+        self.worker_pool.start_new_frame();
     }
 
     /// Shuts down the job system, waiting for all jobs to complete.

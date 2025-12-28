@@ -1,5 +1,5 @@
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo};
-use rustfiber::{JobSystem, PinningStrategy};
+use rustfiber::{JobSystem, PinningStrategy, counter::Counter};
 use std::time::Instant;
 
 fn sequential_quicksort(arr: &mut [i32]) {
@@ -53,19 +53,28 @@ pub fn run_quicksort_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
         let chunk_size = 1000_usize;
         let num_chunks = array_size.div_ceil(chunk_size);
 
-        let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        for chunk_idx in 0..num_chunks {
-            let start_idx = chunk_idx * chunk_size;
-            let end_idx = ((chunk_idx + 1) * chunk_size).min(array_size);
-            let mut chunk: Vec<i32> = arr[start_idx..end_idx].to_vec();
+        let root_job = job_system.run_with_context(move |ctx| {
+            let group = Counter::new(num_chunks);
 
-            jobs.push(Box::new(move || {
-                sequential_quicksort(&mut chunk);
-            }));
-        }
+            for chunk_idx in 0..num_chunks {
+                let start_idx = chunk_idx * chunk_size;
+                let end_idx = ((chunk_idx + 1) * chunk_size).min(array_size);
+                // Note: Allocating vector here is fine as it simulates data preparation
+                let mut chunk: Vec<i32> = arr[start_idx..end_idx].to_vec();
+                let group_clone = group.clone();
 
-        let counter = job_system.run_multiple(jobs);
-        job_system.wait_for_counter(&counter);
+                ctx.spawn_with_counter(
+                    move |_| {
+                        sequential_quicksort(&mut chunk);
+                    },
+                    group_clone,
+                );
+            }
+
+            ctx.wait_for(&group);
+        });
+
+        job_system.wait_for_counter(&root_job);
 
         let elapsed = start.elapsed();
         let elapsed_ms = elapsed.as_secs_f64() * 1000.0;

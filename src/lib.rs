@@ -29,6 +29,7 @@
 //! job_system.wait_for_counter(&counter);
 //! ```
 
+pub mod allocator;
 pub mod context;
 pub mod counter;
 pub mod fiber;

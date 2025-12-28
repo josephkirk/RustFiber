@@ -1,20 +1,18 @@
 use crate::utils::{BenchmarkResult, DataPoint, SystemInfo};
+use crossbeam::queue::SegQueue;
 use rustfiber::{JobSystem, PinningStrategy};
-use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// Batch size for producer job submissions to reduce lock contention.
-/// Based on benchmark analysis, batching 32 items at a time provides
-/// a good balance between lock overhead reduction and memory locality.
-const PRODUCER_BATCH_SIZE: usize = 32;
-
+/// Benchmark for Producer-Consumer pattern using a lock-free queue.
+/// This tests the pure throughput of the job system and fiber switching
+/// without being bottlenecked by global mutex contention.
 pub fn run_producer_consumer_benchmark(
     strategy: PinningStrategy,
     threads: usize,
 ) -> BenchmarkResult {
-    eprintln!("\n=== Benchmark 3: Producer-Consumer Stress Test ===");
+    eprintln!("\n=== Benchmark 3: Producer-Consumer (Lock-Free) ===");
 
     let system_info = SystemInfo::collect(strategy, threads);
     eprintln!(
@@ -46,13 +44,13 @@ pub fn run_producer_consumer_benchmark(
         eprintln!("\nTesting with {} items...", num_items);
 
         // Shared queue for producer-consumer pattern
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(SegQueue::new());
         let produced = Arc::new(AtomicUsize::new(0));
         let consumed = Arc::new(AtomicUsize::new(0));
 
         let start = Instant::now();
 
-        // Create producer jobs with batching to reduce lock contention
+        // Create producer jobs
         let num_producers = (threads / 2).max(1);
         let items_per_producer = num_items / num_producers;
         let remainder = num_items % num_producers;
@@ -68,22 +66,11 @@ pub fn run_producer_consumer_benchmark(
             };
 
             producer_jobs.push(Box::new(move || {
-                // Process items in batches to reduce lock overhead
-                let mut batch = Vec::with_capacity(PRODUCER_BATCH_SIZE);
+                // Push items directly (SegQueue is lock-free)
                 for j in 0..my_items {
-                    batch.push(j);
-
-                    if batch.len() >= PRODUCER_BATCH_SIZE || j == my_items - 1 {
-                        // Push batch to queue with single lock acquisition
-                        let count = batch.len();
-                        let mut q = queue_clone.lock().unwrap();
-                        for item in batch.drain(..) {
-                            q.push_back(item);
-                        }
-                        drop(q);
-                        produced_clone.fetch_add(count, Ordering::SeqCst);
-                    }
+                    queue_clone.push(j);
                 }
+                produced_clone.fetch_add(my_items, Ordering::SeqCst);
             }));
         }
 
@@ -98,18 +85,13 @@ pub fn run_producer_consumer_benchmark(
 
             consumer_jobs.push(Box::new(move || {
                 while consumed_clone.load(Ordering::SeqCst) < target {
-                    let item = {
-                        let mut q = queue_clone.lock().unwrap();
-                        q.pop_front()
-                    };
-
-                    if let Some(item) = item {
+                    if let Some(item) = queue_clone.pop() {
                         consumed_clone.fetch_add(1, Ordering::SeqCst);
-                        // Simulate some work
+                        // Simulate work
                         let _ = item * 2;
                     } else {
-                        // Brief yield if queue is empty
-                        std::thread::sleep(std::time::Duration::from_micros(1));
+                        // Brief yield/spin if queue is empty
+                        std::thread::yield_now();
                     }
                 }
             }));
@@ -145,7 +127,7 @@ pub fn run_producer_consumer_benchmark(
     job_system.shutdown().ok();
 
     BenchmarkResult {
-        name: "Benchmark 3: Producer-Consumer Stress Test".to_string(),
+        name: "Benchmark 3: Producer-Consumer (Lock-Free)".to_string(),
         data_points,
         system_info,
         crashed: false,
