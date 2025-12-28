@@ -23,6 +23,7 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Strategy-Aware Scheduling**: Hybrid Local/Global scheduling to optimize for both cache affinity (`Linear`) and load balancing (`TieredSpillover`).
 - **Frame Allocator**: Bump allocation for jobs, eliminating heap fragmentation and locking.
 - **Zero-Overhead Submission**: Lock-free Local Queue submission and detached jobs for maximum throughput.
+- **Cache Alignment**: Critical structures (`Counter`, `WaitNode`) and global states are explicitly aligned/padded to prevent false sharing on high-core CPUs.
 
 ## Quick Start
 

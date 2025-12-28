@@ -270,6 +270,9 @@ mod tests {
 
     #[test]
     fn test_wait_node_alignment() {
-        assert!(std::mem::align_of::<WaitNode>() >= 64, "WaitNode not aligned to 64");
+        assert!(
+            std::mem::align_of::<WaitNode>() >= 64,
+            "WaitNode not aligned to 64"
+        );
     }
 }

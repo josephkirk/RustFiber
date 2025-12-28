@@ -231,6 +231,9 @@ mod tests {
 
     #[test]
     fn test_inner_counter_alignment() {
-        assert!(std::mem::align_of::<InnerCounter>() >= 128, "InnerCounter not aligned to 128");
+        assert!(
+            std::mem::align_of::<InnerCounter>() >= 128,
+            "InnerCounter not aligned to 128"
+        );
     }
 }
