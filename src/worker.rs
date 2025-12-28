@@ -12,6 +12,7 @@ use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use crossbeam::utils::{Backoff, CachePadded};
+use rand::{Rng, SeedableRng};
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -194,6 +195,10 @@ impl Worker {
 
         // Init backoff outside the loop so it persists across iterations
         let backoff = Backoff::new();
+        
+        // Initialize RNG for randomized back-off
+        // We use SmallRng for performance as we might call it frequently in the idle loop
+        let mut rng = rand::rngs::SmallRng::from_rng(&mut rand::rng());
 
         // Track local frame index to detect changes
         let mut local_frame_index = frame_index.load(Ordering::Relaxed);
@@ -489,9 +494,15 @@ impl Worker {
                             continue;
                         }
 
-                        // Deep Idle: Yield instead of sleep for benchmarking
-                        // thread::sleep(std::time::Duration::from_micros(100));
-                        thread::yield_now();
+                        // Deep Idle: Randomized Back-off
+                        // Mitigation for "Thundering Herd": When multiple workers are idle and contending
+                        // for the same empty victims, we must desynchronize them.
+                        // We spin/yield a random number of times before resetting the backoff.
+                        let backoff_loops = rng.random_range(1..=5);
+                        for _ in 0..backoff_loops {
+                            thread::yield_now();
+                        }
+                        
                         backoff.reset();
                     } else {
                         // Brief Idle: Spin or yield
