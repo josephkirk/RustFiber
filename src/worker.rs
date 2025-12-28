@@ -12,9 +12,56 @@ use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use crossbeam::utils::{Backoff, CachePadded};
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
+
+// Thread-Local Storage for the worker's FrameAllocator
+thread_local! {
+    static ACTIVE_ALLOCATOR: Cell<Option<*mut FrameAllocator>> = Cell::new(None);
+}
+
+/// Helper to temporarily expose the allocator via TLS
+struct ScopedAllocator;
+
+impl ScopedAllocator {
+    /// Registers the allocator in TLS.
+    ///
+    /// # Safety
+    /// Caller must ensure the allocator outlives this struct and is not accessed uniquely
+    /// while accessed via TLS.
+    unsafe fn new(ptr: *mut FrameAllocator) -> Self {
+        ACTIVE_ALLOCATOR.with(|tls| tls.set(Some(ptr)));
+        Self
+    }
+}
+
+impl Drop for ScopedAllocator {
+    fn drop(&mut self) {
+        ACTIVE_ALLOCATOR.with(|tls| tls.set(None));
+    }
+}
+
+/// Executes a closure wih the current thread's frame allocator, if available.
+pub fn with_current_allocator<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut FrameAllocator) -> R,
+{
+    ACTIVE_ALLOCATOR.with(|tls| {
+        if let Some(ptr) = tls.get() {
+            // SAFETY: See get_current_allocator.
+            unsafe { Some(f(&mut *ptr)) }
+        } else {
+            None
+        }
+    })
+}
+
+/// Returns a raw pointer to the current thread's frame allocator, if active.
+pub fn get_current_allocator() -> Option<*mut FrameAllocator> {
+    ACTIVE_ALLOCATOR.with(|tls| tls.get())
+}
 
 /// A worker thread that executes jobs from a queue.
 pub struct Worker {
@@ -83,6 +130,10 @@ impl Worker {
 
         // Initialize FrameAllocator on the thread (First-Touch)
         let mut allocator = FrameAllocator::new(fiber_config.frame_stack_size);
+        
+        // SAFETY: Allocator lives as long as the function (and this scope).
+        // Access via TLS is strictly local to this thread.
+        let _scope = unsafe { ScopedAllocator::new(&mut allocator as *mut _) };
 
         // Initialize FiberPool on the thread (First-Touch)
         // Initialize FiberPool on the thread (First-Touch)

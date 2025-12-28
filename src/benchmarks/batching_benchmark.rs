@@ -1,4 +1,4 @@
-use crate::utils::BenchmarkResult;
+use super::utils::BenchmarkResult;
 use rustfiber::{JobSystem, PinningStrategy};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

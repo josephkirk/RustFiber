@@ -71,10 +71,50 @@ pub struct Job {
 
 impl Job {
     /// Creates a new job with the given work function.
+    ///
+    /// This method falls back to global heap allocation (`Box`) if no worker-local
+    /// frame allocator is available or if it is full.
     pub fn new<F>(work: F) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
+        use std::alloc::Layout;
+
+        // Try local allocation first
+        if let Some(alloc_ptr) = crate::worker::get_current_allocator() {
+            // SAFETY: We are on a worker thread with an active frame allocator scope.
+            // The pointer is valid and properly aligned. We rely on the single-threaded nature
+            // of the worker loop to avoid data races (allocator is not Sync, but TLS guarantees exclusivity).
+            // We are creating a temporary mutable reference to `allocator` here.
+            // This assumes `Job::new` is not called while another mutable reference to `allocator` is active
+            // *in the same call stack* (e.g. inside `allocator.alloc(...)` which is impossible).
+            unsafe {
+                let allocator = &mut *alloc_ptr;
+                
+                unsafe fn trampoline<F: FnOnce()>(ptr: *mut u8) {
+                    let f = unsafe { std::ptr::read(ptr as *mut F) };
+                    f();
+                }
+
+                let layout = Layout::new::<F>();
+                // Attempt allocation. If it fails (returns None), we fall through to heap allocation.
+                if let Some(ptr) = allocator.alloc(layout) {
+                     let ptr = ptr.as_ptr() as *mut F;
+                     std::ptr::write(ptr, work);
+                     
+                     return Job {
+                        work: Work::SimpleFrame {
+                            func: trampoline::<F>,
+                            data: SendPtr(ptr as *mut u8),
+                        },
+                        counter: None,
+                        priority: JobPriority::Normal,
+                    };
+                }
+            }
+        }
+
+        // Fallback to heap allocation
         Job {
             work: Work::Simple(Box::new(work)),
             counter: None,

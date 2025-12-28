@@ -4,6 +4,7 @@ pub mod nas_benchmarks;
 pub mod producer_consumer;
 pub mod quicksort;
 pub mod utils;
+pub mod allocation;
 
 use fibonacci::run_fibonacci_benchmark;
 use nas_benchmarks::{run_nas_cg_benchmark, run_nas_ep_benchmark, run_nas_mg_benchmark};
@@ -59,6 +60,7 @@ fn main() {
         run_nas_mg_benchmark,
         run_nas_cg_benchmark,
         batching_benchmark::run_batching_benchmark,
+        allocation::run_allocation_benchmark,
     ];
 
     for run in runs {
