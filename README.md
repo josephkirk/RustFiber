@@ -15,6 +15,7 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Job Prioritization**: Schedule critical tasks with `High`, `Normal`, or `Low` priority
 - ✅ **High Throughput**: Capable of millions of jobs per second
 - ✅ **Simple API**: Easy to use interface for job submission and synchronization
+- ✅ **Performance Monitoring**: Optional metrics collection for debugging throughput and bottlenecks
 
 ## v0.2 Optimizations (New)
 
@@ -106,6 +107,37 @@ let job_system = JobSystem::builder()
     .pinning_strategy(PinningStrategy::AvoidSMT)
     .build();
 ```
+
+### Performance Monitoring
+
+Enable optional metrics collection to track job throughput and queue depths. This feature requires the `metrics` Cargo feature flag to be enabled.
+
+First, enable the feature in your `Cargo.toml`:
+
+```toml
+[dependencies]
+rustfiber = { version = "0.1", features = ["metrics"] }
+```
+
+Then use it in your code:
+
+```rust
+use rustfiber::JobSystem;
+
+let job_system = JobSystem::builder()
+    .enable_metrics(true)
+    .build();
+
+// Run some jobs...
+
+if let Some(metrics) = job_system.metrics() {
+    println!("Jobs completed: {}", metrics.jobs_completed);
+    println!("Jobs/sec: {:.2}", metrics.jobs_per_second());
+    println!("Local queue depth: {}", metrics.local_queue_depth());
+}
+```
+
+Metrics are collected with minimal overhead when enabled.
 
 ## Building
 

@@ -9,7 +9,6 @@ use crate::PinningStrategy;
 use crate::counter::Counter;
 use crate::job::Job;
 use crate::worker::{WorkerPool, WorkerPoolError};
-#[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -64,6 +63,8 @@ impl Default for FiberConfig {
 /// submitting jobs and synchronizing on their completion.
 pub struct JobSystem {
     worker_pool: WorkerPool,
+    #[cfg(feature = "metrics")]
+    metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
 /// Builder for creating JobSystem instances with custom configuration.
@@ -74,6 +75,8 @@ pub struct JobSystemBuilder {
     num_threads: Option<usize>,
     fiber_config: FiberConfig,
     pinning_strategy: crate::PinningStrategy,
+    #[cfg(feature = "metrics")]
+    enable_metrics: bool,
 }
 
 impl Default for JobSystemBuilder {
@@ -82,6 +85,8 @@ impl Default for JobSystemBuilder {
             num_threads: None, // Will use available_parallelism
             fiber_config: FiberConfig::default(),
             pinning_strategy: crate::PinningStrategy::None,
+            #[cfg(feature = "metrics")]
+            enable_metrics: false,
         }
     }
 }
@@ -109,6 +114,13 @@ impl JobSystemBuilder {
     /// Sets the CPU pinning strategy.
     pub fn pinning_strategy(mut self, strategy: crate::PinningStrategy) -> Self {
         self.pinning_strategy = strategy;
+        self
+    }
+
+    /// Enables or disables performance metrics collection.
+    #[cfg(feature = "metrics")]
+    pub fn enable_metrics(mut self, enable: bool) -> Self {
+        self.enable_metrics = enable;
         self
     }
 
@@ -144,12 +156,23 @@ impl JobSystemBuilder {
                 .unwrap_or(4)
         });
 
+        #[cfg(feature = "metrics")]
+        let metrics = if self.enable_metrics {
+            Some(Arc::new(crate::metrics::Metrics::new()))
+        } else {
+            None
+        };
+
         JobSystem {
             worker_pool: WorkerPool::new_with_strategy(
                 num_threads,
                 self.pinning_strategy,
                 self.fiber_config,
+                #[cfg(feature = "metrics")]
+                metrics.as_ref().map(Arc::clone),
             ),
+            #[cfg(feature = "metrics")]
+            metrics,
         }
     }
 }
@@ -179,6 +202,8 @@ impl JobSystem {
     pub fn new_with_config(num_threads: usize, config: FiberConfig) -> Self {
         JobSystem {
             worker_pool: WorkerPool::new(num_threads, config),
+            #[cfg(feature = "metrics")]
+            metrics: None,
         }
     }
 
@@ -205,7 +230,11 @@ impl JobSystem {
                 num_threads,
                 crate::PinningStrategy::Linear,
                 FiberConfig::default(),
+                #[cfg(feature = "metrics")]
+                None,
             ),
+            #[cfg(feature = "metrics")]
+            metrics: None,
         }
     }
 
@@ -229,7 +258,11 @@ impl JobSystem {
                 num_threads,
                 strategy,
                 FiberConfig::default(),
+                #[cfg(feature = "metrics")]
+                None,
             ),
+            #[cfg(feature = "metrics")]
+            metrics: None,
         }
     }
 
@@ -294,7 +327,11 @@ impl JobSystem {
                 num_cpus,
                 crate::PinningStrategy::AvoidSMT,
                 config,
+                #[cfg(feature = "metrics")]
+                None,
             ),
+            #[cfg(feature = "metrics")]
+            metrics: None,
         }
     }
 
@@ -327,7 +364,11 @@ impl JobSystem {
                 num_cpus,
                 crate::PinningStrategy::Linear,
                 config,
+                #[cfg(feature = "metrics")]
+                None,
             ),
+            #[cfg(feature = "metrics")]
+            metrics: None,
         }
     }
 
@@ -360,7 +401,11 @@ impl JobSystem {
                 num_cpus,
                 crate::PinningStrategy::CCDIsolation,
                 config,
+                #[cfg(feature = "metrics")]
+                None,
             ),
+            #[cfg(feature = "metrics")]
+            metrics: None,
         }
     }
 
@@ -839,6 +884,12 @@ impl JobSystem {
         self.worker_pool.start_new_frame();
     }
 
+    /// Returns a snapshot of current performance metrics, if enabled.
+    #[cfg(feature = "metrics")]
+    pub fn metrics(&self) -> Option<crate::metrics::MetricsSnapshot> {
+        self.metrics.as_ref().map(|m| m.snapshot())
+    }
+
     /// Shuts down the job system, waiting for all jobs to complete.
     ///
     /// Returns Ok if shutdown was successful, or Err if any worker threads panicked.
@@ -1065,5 +1116,30 @@ fn test_preset_functionality() {
 
     job_system.wait_for_counter(&counter);
     assert_eq!(executed.load(Ordering::SeqCst), 1);
+    job_system.shutdown().expect("Shutdown failed");
+}
+
+#[cfg(feature = "metrics")]
+#[test]
+fn test_metrics_collection() {
+    let job_system = JobSystem::builder()
+        .thread_count(2)
+        .enable_metrics(true)
+        .build();
+
+    // Run some jobs
+    let counter = job_system.run(|| {
+        // Simple job
+    });
+    job_system.wait_for_counter(&counter);
+
+    // Check metrics
+    if let Some(snapshot) = job_system.metrics() {
+        assert!(snapshot.jobs_completed >= 1);
+        assert!(snapshot.elapsed_seconds >= 0.0);
+    } else {
+        panic!("Metrics should be enabled");
+    }
+
     job_system.shutdown().expect("Shutdown failed");
 }

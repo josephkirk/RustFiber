@@ -36,11 +36,20 @@ fn main() {
         utils::num_cpus()
     };
 
+    #[cfg(feature = "metrics")]
+    let enable_metrics = if args.len() > 3 && args[3] == "metrics" {
+        true
+    } else {
+        false
+    };
+
     eprintln!("=======================================================");
     eprintln!("           RustFiber Benchmark Suite");
     eprintln!("=======================================================");
     eprintln!("\nStrategy: {:?}", strategy);
     eprintln!("Threads:  {}", threads);
+    #[cfg(feature = "metrics")]
+    eprintln!("Metrics:  {}", if enable_metrics { "Enabled" } else { "Disabled" });
 
     // One-time Global Initialization (OS Settle + Warmup)
     eprintln!("\n[STARTUP] Initializing Global Job System...");

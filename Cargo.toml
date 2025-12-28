@@ -3,6 +3,9 @@ name = "rustfiber"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+metrics = []
+
 [dependencies]
 crossbeam = "0.8"
 serde = { version = "1.0", features = ["derive"] }
@@ -14,7 +17,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 crossbeam-utils = "0.8.21"  
 rand = { version = "0.9.2", features = ["small_rng"] }
-thiserror = "1.0"
+thiserror = "2.0.17"
 
 [lib]
 name = "rustfiber"

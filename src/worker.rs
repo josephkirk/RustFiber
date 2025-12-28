@@ -86,6 +86,8 @@ pub(crate) struct WorkerParams {
     pub(crate) fiber_config: crate::job_system::FiberConfig,
     pub(crate) frame_index: Arc<CachePadded<AtomicU64>>,
     pub(crate) topology: Arc<crate::topology::Topology>,
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
 impl Worker {
@@ -126,7 +128,9 @@ impl Worker {
             fiber_config,
             frame_index,
             topology,
-            ..
+            core_id: _,
+            #[cfg(feature = "metrics")]
+            metrics,
         } = params;
 
         // Initialize FrameAllocator on the thread (First-Touch)
@@ -213,17 +217,41 @@ impl Worker {
             // Try to get a job: High Priority -> Local -> Steal (Topology Aware) -> Global
             let job = loop {
                 match high_priority_injector.steal() {
-                    crossbeam::deque::Steal::Success(job) => break Some(job),
+                    crossbeam::deque::Steal::Success(job) => {
+                        #[cfg(feature = "metrics")]
+                        if let Some(metrics) = &metrics {
+                            metrics.global_injector_pops.fetch_add(1, Ordering::Relaxed);
+                        }
+                        break Some(job);
+                    }
                     crossbeam::deque::Steal::Retry => continue,
                     crossbeam::deque::Steal::Empty => break None,
                 }
             }
-            .or_else(|| local_queue.pop())
+            .or_else(|| {
+                let j = local_queue.pop();
+                #[cfg(feature = "metrics")]
+                if let Some(metrics) = &metrics {
+                    if j.is_some() {
+                        metrics.local_queue_pops.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                j
+            })
             .or_else(|| {
                 // Try to steal from other workers using Topology-Aware order
                 ordered_stealers
                     .iter()
-                    .map(|s| s.steal_batch_and_pop(&local_queue))
+                    .map(|s| {
+                        let result = s.steal_batch_and_pop(&local_queue);
+                        #[cfg(feature = "metrics")]
+                        if let Some(metrics) = &metrics {
+                            if let crossbeam::deque::Steal::Success(_) = &result {
+                                metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        result
+                    })
                     .find_map(|steal_result| match steal_result {
                         crossbeam::deque::Steal::Success(job) => Some(job),
                         _ => None,
@@ -235,7 +263,14 @@ impl Worker {
 
                         loop {
                             match injector.steal_batch_and_pop(&local_queue) {
-                                crossbeam::deque::Steal::Success(job) => return Some(job),
+                                crossbeam::deque::Steal::Success(job) => {
+                                    #[cfg(feature = "metrics")]
+                                    if let Some(metrics) = &metrics {
+                                        metrics.global_injector_pops.fetch_add(1, Ordering::Relaxed);
+                                        metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    return Some(job);
+                                }
                                 crossbeam::deque::Steal::Empty => break,
                                 crossbeam::deque::Steal::Retry => {
                                     retry_count += 1;
@@ -327,6 +362,10 @@ impl Worker {
 
                     match state {
                         FiberState::Complete => {
+                            #[cfg(feature = "metrics")]
+                            if let Some(metrics) = &metrics {
+                                metrics.jobs_completed.fetch_add(1, Ordering::Relaxed);
+                            }
                             // Ensure flag is set for any concurrent waiters (though unlikely for Complete)
                             fiber.is_suspended.store(true, Ordering::Release);
                             fiber_pool.return_fiber(fiber);
@@ -345,13 +384,25 @@ impl Worker {
                                     crate::PinningStrategy::TieredSpillover => {
                                         // Push to global injector to wake up dormant threads
                                         if job.priority == crate::job::JobPriority::High {
+                                            #[cfg(feature = "metrics")]
+                                            if let Some(metrics) = &metrics {
+                                                metrics.global_injector_pushes.fetch_add(1, Ordering::Relaxed);
+                                            }
                                             high_priority_injector.push(job);
                                         } else {
+                                            #[cfg(feature = "metrics")]
+                                            if let Some(metrics) = &metrics {
+                                                metrics.global_injector_pushes.fetch_add(1, Ordering::Relaxed);
+                                            }
                                             injector.push(job);
                                         }
                                     }
                                     _ => {
                                         // Keep local for other strategies
+                                        #[cfg(feature = "metrics")]
+                                        if let Some(metrics) = &metrics {
+                                            metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                                        }
                                         local_queue.push(job);
                                     }
                                 }
@@ -431,7 +482,7 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Creates a new worker pool with work-stealing queues.
     pub fn new(num_threads: usize, config: crate::job_system::FiberConfig) -> Self {
-        Self::new_with_strategy(num_threads, PinningStrategy::None, config)
+        Self::new_with_strategy(num_threads, PinningStrategy::None, config, #[cfg(feature = "metrics")] None)
     }
 
     /// Creates a new worker pool with optional CPU affinity pinning.
@@ -448,6 +499,8 @@ impl WorkerPool {
                 PinningStrategy::None
             },
             config,
+            #[cfg(feature = "metrics")]
+            None,
         )
     }
 
@@ -456,6 +509,7 @@ impl WorkerPool {
         num_threads: usize,
         strategy: PinningStrategy,
         config: crate::job_system::FiberConfig,
+        #[cfg(feature = "metrics")] metrics: Option<Arc<crate::metrics::Metrics>>,
     ) -> Self {
         let injector = Arc::new(Injector::new());
         let high_priority_injector = Arc::new(Injector::new());
@@ -563,6 +617,8 @@ impl WorkerPool {
                 fiber_config: config.clone(),
                 frame_index: Arc::clone(&frame_index),
                 topology: Arc::clone(&topology),
+                #[cfg(feature = "metrics")]
+                metrics: metrics.as_ref().map(Arc::clone),
             }));
         }
 
