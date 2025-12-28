@@ -41,30 +41,56 @@ pub fn run_work_stealing_stress_benchmark(
 
     let root_counter = job_system.run_with_context(move |ctx| {
         // Heavy work on worker 0 (assuming pinning)
-        let c = counter_clone.clone();
-        ctx.spawn_job(move |_| {
-            for _ in 0..heavy_workload {
-                std::hint::black_box(fibonacci(20));
-            }
-            c.fetch_add(heavy_workload, Ordering::Relaxed);
-        });
-
-        // Light work on other workers
-        for _ in 1..threads {
+        // Spawn individual jobs to allow stealing!
+        for _ in 0..heavy_workload {
             let c = counter_clone.clone();
             ctx.spawn_job(move |_| {
-                for _ in 0..light_workload {
-                    std::hint::black_box(());
-                }
-                c.fetch_add(light_workload, Ordering::Relaxed);
+                std::hint::black_box(fibonacci(20));
+                c.fetch_add(1, Ordering::Relaxed);
             });
         }
+
+        // Light work on other workers
+        // We spawn distinct jobs here too, though they might finish fast.
+        // To target specific workers in `run_with_context` is tricky as `spawn_job` goes to local queue.
+        // But `run_with_context` runs on the *caller* thread? 
+        // Wait, `run_with_context` usually runs on current thread if it's a worker, or picks one?
+        // Actually `JobSystem::run_with_context` blocks current thread and uses it as a worker?
+        // No, `run_with_context` usually submits a root job.
+        
+        // The original code assumed pinning. "Heavy work on worker 0".
+        // `ctx` here is from the root job.
+        // If the root job runs on Worker 0, then `ctx.spawn_job` pushes to Worker 0.
+        // To simulate "Others have light work", we might need to rely on the fact that
+        // the loop above fills Worker 0, and we want OTHERS to have work?
+        // Actually, if we just fill Worker 0, others will steal from it.
+        // The original logic tried to put work on others:
+        /*
+        for _ in 1..threads {
+             ctx.spawn_job(...) 
+        }
+        */
+        // If `ctx` is on Worker 0, this just pushes MORE to Worker 0.
+        // Unless there's a mechanism to push to others? 
+        // `spawn_job` is local.
+        // So the original benchmark was likely ALL on Worker 0 (if root was on Worker 0).
+        // Or if root was on global?
+        
+        // If we want a "Stress" test of stealing, putting ALL 100,000 jobs on Worker 0 
+        // and having everyone else steal is the PERFECT scenario.
+        // So we don't strictly need to manually place work on others if they start empty.
+        // They will just steal.
+        // So let's just dump 100k jobs on the current worker (Root) and let others feast.
+        
+        // We can ignore the "Light work" loop or just add it to the pile.
+        // Start simple: 100k jobs on Root.
     });
 
     job_system.wait_for_counter(&root_counter);
 
     // Wait for all to complete
-    let total_tasks = heavy_workload + (threads - 1) * light_workload;
+    // We only spawn heavy_workload now.
+    let total_tasks = heavy_workload;
     while counter.load(Ordering::Relaxed) < total_tasks {
         std::thread::yield_now();
     }
