@@ -134,3 +134,15 @@ See [BENCHMARKS.md](BENCHMARKS.md) for detailed graphs and results.
 
 - **Windows NUMA Prefaulting**: Disabled due to guard page violations that prevent direct memory writes to fiber stack regions. The framework is in place for future resolution of Windows compatibility issues.
 - **Large Page Support**: Deferred to v0.3. Currently uses standard 4KB pages for fiber stacks, which may increase TLB pressure on large deployments.
+
+
+### General Improvements Plan
+- **Error Handling**: Consider adding more granular error types instead of relying on `Result<(), Box<dyn std::error::Error>>` in some places for better debugging.
+- **Documentation**: Ensure all public APIs have comprehensive documentation with examples, especially for complex types like `PinningStrategy`.
+- **Testing**: Add more integration tests for edge cases, such as system shutdown during job execution or memory allocation failures.
+- **Performance Monitoring**: Consider adding optional metrics collection (e.g., job throughput, queue depths) for debugging performance issues.
+
+### Specific Code Areas
+- **Fiber Pool Management**: The incremental growth logic in `fiber_pool.rs` could benefit from more detailed comments explaining the hysteresis and growth thresholds.
+- **Work Stealing**: Verify that the LIFO/FIFO deque implementation is correctly optimized for the target architectures, potentially adding SIMD optimizations if beneficial.
+- **Allocator Safety**: Review all unsafe blocks in `allocator/` for potential race conditions, especially in multi-threaded scenarios.

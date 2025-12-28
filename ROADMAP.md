@@ -17,3 +17,8 @@
 - **Status**: Deferred.
 - **Reason**: Windows Guard Page mechanism (`STATUS_GUARD_PAGE_VIOLATION`) conflicts with manual probing of `corosensei` stacks. Requires custom stack allocator to handle `VirtualAlloc` directly.
 
+### Parallel For Optimization
+- **Goal**: Reduce contention in massive nested parallelism by using local queues instead of global injector.
+- **Plan**: Refactor `parallel_for` to be generic over submission target, allowing `Context::parallel_for` to submit to local queue.
+- **Benefit**: Better scalability for deeply nested parallel algorithms.
+
