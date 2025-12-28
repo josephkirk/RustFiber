@@ -116,7 +116,7 @@ impl Job {
     }
 
     /// Creates a new job with an associated counter, allocated in the frame allocator.
-    pub fn with_counter_in_allocator<F>(work: F, counter: Counter, allocator: &mut FrameAllocator) -> Self
+    pub fn with_counter_in_allocator<F>(work: F, counter: Option<Counter>, allocator: &mut FrameAllocator) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
@@ -138,11 +138,14 @@ impl Job {
                     func: trampoline::<F>,
                     data: SendPtr(ptr as *mut u8),
                 },
-                counter: Some(counter),
+                counter,
                 priority: JobPriority::Normal,
             }
         } else {
-             Job::with_counter(work, counter)
+             match counter {
+                 Some(c) => Job::with_counter(work, c),
+                 None => Job::new(work),
+             }
         }
     }
 
@@ -176,7 +179,7 @@ impl Job {
     /// before the JobSystem is dropped.
     pub(crate) fn with_counter_and_context<F>(
         work: F,
-        counter: Counter,
+        counter: Option<Counter>,
         job_system_ptr: usize,
     ) -> Self
     where
@@ -187,7 +190,7 @@ impl Job {
                 work: Box::new(work),
                 job_system_ptr,
             },
-            counter: Some(counter),
+            counter,
             priority: JobPriority::Normal,
         }
     }
@@ -195,7 +198,7 @@ impl Job {
     /// Creates a new job with context support and an associated counter, allocated in the frame allocator.
     pub(crate) fn with_counter_and_context_in_allocator<F>(
         work: F,
-        counter: Counter,
+        counter: Option<Counter>,
         allocator: &mut FrameAllocator,
         job_system_ptr: usize,
     ) -> Self
@@ -223,7 +226,7 @@ impl Job {
                     data: SendPtr(ptr as *mut u8),
                     job_system_ptr,
                 },
-                counter: Some(counter),
+                counter,
                 priority: JobPriority::Normal,
             }
         } else {

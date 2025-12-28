@@ -251,7 +251,7 @@ impl JobSystem {
         let counter_clone = counter.clone();
 
         let job_system_ptr = self as *const JobSystem as usize;
-        let job = Job::with_counter_and_context(work, counter_clone, job_system_ptr);
+        let job = Job::with_counter_and_context(work, Some(counter_clone), job_system_ptr);
 
         self.worker_pool.submit(job);
 
@@ -291,7 +291,7 @@ impl JobSystem {
             .into_iter()
             .map(|work| {
                 let counter_clone = counter.clone();
-                Job::with_counter_and_context(work, counter_clone, job_system_ptr)
+                Job::with_counter_and_context(work, Some(counter_clone), job_system_ptr)
             })
             .collect();
 

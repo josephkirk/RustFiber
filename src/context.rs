@@ -32,6 +32,32 @@ impl<'a> Context<'a> {
         F: FnOnce(&Context) + Send + 'static,
     {
         let counter = Counter::new(1);
+        self.spawn_internal(work, Some(counter.clone()));
+        counter
+    }
+
+    /// Spawns a job without a counter (fire-and-forget).
+    /// This avoids the overhead of allocating a Counter on the heap.
+    pub fn spawn_detached<F>(&self, work: F)
+    where
+        F: FnOnce(&Context) + Send + 'static,
+    {
+        self.spawn_internal(work, None);
+    }
+
+    /// Spawns a job that shares an existing counter.
+    /// Useful for grouping multiple jobs under a single synchronization primitive.
+    pub fn spawn_with_counter<F>(&self, work: F, counter: Counter)
+    where
+        F: FnOnce(&Context) + Send + 'static,
+    {
+        self.spawn_internal(work, Some(counter));
+    }
+
+    fn spawn_internal<F>(&self, work: F, counter: Option<Counter>)
+    where
+        F: FnOnce(&Context) + Send + 'static,
+    {
         let job = if let Some(alloc_ptr) = self.allocator {
             // SAFETY: The allocator acts as a bump allocator owned by the worker provided to the fiber.
             // Nested jobs run before the frame ends, or rather, we must ensure integrity.
@@ -44,16 +70,15 @@ impl<'a> Context<'a> {
                 // Use generic internal method we implemented on Job
                 crate::job::Job::with_counter_and_context_in_allocator(
                     work, 
-                    counter.clone(), 
+                    counter, 
                     alloc, 
                     job_system_ptr
                 )
             }
         } else {
             // Fallback to heap allocation
-            let counter_clone = counter.clone();
             let job_system_ptr = self.job_system as *const _ as usize;
-            crate::job::Job::with_counter_and_context(work, counter_clone, job_system_ptr)
+            crate::job::Job::with_counter_and_context(work, counter, job_system_ptr)
         };
 
         if let Some(queue) = self.local_queue {
@@ -67,7 +92,6 @@ impl<'a> Context<'a> {
             // Fallback to global injector (Lock contention)
             self.job_system.submit_to_injector(job);
         }
-        counter
     }
 
     pub fn spawn_jobs<I>(&self, jobs: I) -> Counter

@@ -53,19 +53,25 @@ pub fn run_fibonacci_benchmark(strategy: PinningStrategy, threads: usize) -> Ben
 
         let start = Instant::now();
         let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
 
-        let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        for _ in 0..num_tasks {
-            let counter_clone = counter.clone();
-            jobs.push(Box::new(move || {
-                // Calculate fibonacci(20) for consistent small workload
-                let _ = fibonacci(20);
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            }));
+        let root_job = job_system.run_with_context(move |ctx| {
+            for _ in 0..num_tasks {
+                let c_inner = counter_clone.clone();
+                ctx.spawn_detached(move |_| {
+                    // Calculate fibonacci(20) for consistent small workload
+                    let _ = fibonacci(20);
+                    c_inner.fetch_add(1, Ordering::SeqCst);
+                });
+            }
+        });
+        
+        job_system.wait_for_counter(&root_job);
+        
+        // Wait for all detached jobs to complete
+        while counter.load(Ordering::SeqCst) < num_tasks {
+            std::thread::yield_now();
         }
-
-        let job_counter = job_system.run_multiple(jobs);
-        job_system.wait_for_counter(&job_counter);
 
         let elapsed = start.elapsed();
         let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
