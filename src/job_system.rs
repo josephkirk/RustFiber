@@ -9,9 +9,9 @@ use crate::PinningStrategy;
 use crate::counter::Counter;
 use crate::job::Job;
 use crate::worker::{WorkerPool, WorkerPoolError};
-use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -768,6 +768,11 @@ impl JobSystem {
         }
 
         if let Some(fiber_handle) = Fiber::current() {
+            #[cfg(feature = "tracing")]
+            let tid = crate::worker::WORKER_ID.with(|id| id.get().unwrap_or(0));
+            #[cfg(feature = "tracing")]
+            let _trace_event = crate::tracing::TraceGuard::new("Dependency Wait (Fiber)", tid);
+
             // Fiber path: Intrusive wait
             unsafe {
                 let fiber = &*fiber_handle.0;
@@ -850,6 +855,11 @@ impl JobSystem {
                 }
             }
         } else {
+            #[cfg(feature = "tracing")]
+            let tid = crate::worker::WORKER_ID.with(|id| id.get().unwrap_or(0));
+            #[cfg(feature = "tracing")]
+            let _trace_event = crate::tracing::TraceGuard::new("Dependency Wait (Thread)", tid);
+
             // Thread path: Blocking wait
             let mut backoff_us = 1;
             const MAX_BACKOFF_US: u64 = 1000;
@@ -888,6 +898,12 @@ impl JobSystem {
     #[cfg(feature = "metrics")]
     pub fn metrics(&self) -> Option<crate::metrics::MetricsSnapshot> {
         self.metrics.as_ref().map(|m| m.snapshot())
+    }
+
+    /// Exports collected trace events to a JSON file.
+    #[cfg(feature = "tracing")]
+    pub fn export_trace(&self, path: &str) -> std::io::Result<()> {
+        crate::tracing::export_to_file(path)
     }
 
     /// Shuts down the job system, waiting for all jobs to complete.

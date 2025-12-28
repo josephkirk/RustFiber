@@ -184,6 +184,7 @@ pub mod fiber_pool;
 pub mod job;
 pub mod job_system;
 pub mod topology;
+pub mod tracing;
 pub mod worker;
 #[cfg(feature = "metrics")]
 pub mod metrics;

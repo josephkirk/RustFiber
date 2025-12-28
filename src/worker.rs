@@ -90,6 +90,10 @@ pub(crate) struct WorkerParams {
     pub(crate) metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
+thread_local! {
+    pub static WORKER_ID: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
 impl Worker {
     /// Creates and starts a new worker thread with work-stealing support.
     ///
@@ -133,6 +137,8 @@ impl Worker {
             metrics,
         } = params;
 
+        WORKER_ID.set(Some(worker_id));
+
         // Initialize FrameAllocator on the thread (First-Touch)
         let mut allocator = FrameAllocator::new(fiber_config.frame_stack_size);
 
@@ -147,6 +153,9 @@ impl Worker {
             fiber_config.stack_size,
             fiber_config.prefetch_pages,
         );
+
+        #[cfg(feature = "tracing")]
+        let _collector = crate::tracing::CollectorGuard;
 
         // Compute Steal Order based on Topology
         // 1. Siblings (Same NUMA Node)
@@ -240,14 +249,25 @@ impl Worker {
             })
             .or_else(|| {
                 // Try to steal from other workers using Topology-Aware order
-                ordered_stealers
+                let mut steal_attempted = false;
+                let steal_result = ordered_stealers
                     .iter()
                     .map(|s| {
+                        steal_attempted = true;
                         let result = s.steal_batch_and_pop(&local_queue);
                         #[cfg(feature = "metrics")]
                         if let Some(metrics) = &metrics {
-                            if let crossbeam::deque::Steal::Success(_) = &result {
-                                metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                            match &result {
+                                crossbeam::deque::Steal::Success(_) => {
+                                    metrics.worker_steals_success.fetch_add(1, Ordering::Relaxed);
+                                    metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crossbeam::deque::Steal::Empty => {
+                                    metrics.worker_steals_failed.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crossbeam::deque::Steal::Retry => {
+                                    metrics.worker_steals_retry.fetch_add(1, Ordering::Relaxed);
+                                }
                             }
                         }
                         result
@@ -255,22 +275,48 @@ impl Worker {
                     .find_map(|steal_result| match steal_result {
                         crossbeam::deque::Steal::Success(job) => Some(job),
                         _ => None,
-                    })
+                    });
+
+                // If we attempted steals but got nothing, count as failed attempts
+                #[cfg(feature = "metrics")]
+                if steal_attempted && steal_result.is_none() && metrics.is_some() {
+                    // We already counted individual failures above, so this is redundant
+                }
+
+                steal_result
                     .or_else(|| {
                         // If stealing failed, try the global injector
                         let mut retry_count = 0;
                         const MAX_RETRIES: usize = 3;
 
                         loop {
-                            match injector.steal_batch_and_pop(&local_queue) {
-                                crossbeam::deque::Steal::Success(job) => {
-                                    #[cfg(feature = "metrics")]
-                                    if let Some(metrics) = &metrics {
+                            let injector_result = injector.steal_batch_and_pop(&local_queue);
+                            #[cfg(feature = "metrics")]
+                            if let Some(metrics) = &metrics {
+                                match &injector_result {
+                                    crossbeam::deque::Steal::Success(_) => {
+                                        metrics.injector_steals_success.fetch_add(1, Ordering::Relaxed);
                                         metrics.global_injector_pops.fetch_add(1, Ordering::Relaxed);
                                         metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
                                     }
-                                    return Some(job);
+                                    crossbeam::deque::Steal::Empty => {
+                                        metrics.injector_steals_failed.fetch_add(1, Ordering::Relaxed);
+                                        break;
+                                    }
+                                    crossbeam::deque::Steal::Retry => {
+                                        metrics.injector_steals_retry.fetch_add(1, Ordering::Relaxed);
+                                        retry_count += 1;
+                                        if retry_count >= MAX_RETRIES {
+                                            // For injector contention, we yield immediately
+                                            std::thread::yield_now();
+                                            break;
+                                        }
+                                    }
                                 }
+                            }
+
+                            match injector_result {
+                                crossbeam::deque::Steal::Success(job) => return Some(job),
                                 crossbeam::deque::Steal::Empty => break,
                                 crossbeam::deque::Steal::Retry => {
                                     retry_count += 1;
@@ -358,6 +404,8 @@ impl Worker {
                     };
 
                     // Run the fiber
+                    #[cfg(feature = "tracing")]
+                    let _trace_event = crate::tracing::TraceGuard::new("Job Execution", worker_id);
                     let state = fiber.resume(input);
 
                     match state {
@@ -441,8 +489,9 @@ impl Worker {
                             continue;
                         }
 
-                        // Deep Idle: Release SMT resources completely for a short while
-                        thread::sleep(std::time::Duration::from_micros(100));
+                        // Deep Idle: Yield instead of sleep for benchmarking
+                        // thread::sleep(std::time::Duration::from_micros(100));
+                        thread::yield_now();
                         backoff.reset();
                     } else {
                         // Brief Idle: Spin or yield
@@ -699,5 +748,9 @@ impl WorkerPool {
 impl crate::counter::JobScheduler for WorkerPool {
     fn schedule(&self, job: Job) {
         self.submit(job);
+    }
+
+    fn schedule_batch(&self, jobs: Vec<Job>) {
+        self.submit_batch(jobs);
     }
 }
