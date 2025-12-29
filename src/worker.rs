@@ -140,8 +140,9 @@ pub(crate) struct WorkerParams {
     pub(crate) topology: Arc<crate::topology::Topology>,
     pub(crate) parker: Arc<GlobalParker>,
     pub(crate) local_parker: Parker,
-    pub(crate) is_sleeping: Arc<Vec<CachePadded<AtomicBool>>>,
-    pub(crate) sleepers_count: Arc<CachePadded<AtomicUsize>>,
+    pub(crate) sleepers_bitset: Arc<Vec<CachePadded<AtomicUsize>>>,
+    #[allow(dead_code)]
+    pub(crate) wakeup_cursor: Arc<CachePadded<AtomicUsize>>,
     pub(crate) has_work: Arc<Vec<CachePadded<AtomicBool>>>,
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Option<Arc<crate::metrics::Metrics>>,
@@ -214,8 +215,8 @@ impl Worker {
             topology,
             parker,
             local_parker,
-            is_sleeping,
-            sleepers_count,
+            sleepers_bitset,
+            wakeup_cursor: _, // Not used by worker loop directly, but available in params
             has_work,
             core_id: _,
             #[cfg(feature = "metrics")]
@@ -370,8 +371,8 @@ impl Worker {
                         let result = s.steal_batch_and_pop(&local_queue);
                         if let crossbeam::deque::Steal::Success(_) = &result {
                             has_work[worker_id].store(true, Ordering::Relaxed);
-                             // Cascading Wakeup: We stole a batch, so there is likely more work (in our queue now).
-                             // Wake another worker to help.
+                            // Cascading Wakeup: We stole a batch, so there is likely more work (in our queue now).
+                            // Wake another worker to help.
                             parker.wake_one();
                         }
 
@@ -643,27 +644,30 @@ impl Worker {
                         // - Threads are woken up by `notify_one` when new work is pushed.
                         // - This eliminates "Empty Attempts" almost entirely as workers only wake when work exists.
 
-                        // Parking Strategy via Semaphore:
-                        // - Threads block indefinitely until `wake_one` increments the signal count.
-                        // - No polling, no timeout.
-                        
-                        // Set state to Sleeping
-                        is_sleeping[worker_id].store(true, Ordering::SeqCst);
-                        sleepers_count.fetch_add(1, Ordering::SeqCst);
-                        
+                        // Parking Strategy via Bitset:
+                        // - Threads block indefinitely until `wake_one` unparks them.
+
+                        let segment_idx = worker_id / 64;
+                        let bit_mask = 1 << (worker_id % 64);
+
+                        // Set bit (I am sleeping)
+                        sleepers_bitset[segment_idx].fetch_or(bit_mask, Ordering::SeqCst);
+
                         // Double check work (prevent lost wakeup)
-                        if !local_queue.is_empty() || !injector.is_empty() || !high_priority_injector.is_empty() {
-                            sleepers_count.fetch_sub(1, Ordering::SeqCst); // Revert
-                            is_sleeping[worker_id].store(false, Ordering::SeqCst);
+                        if !local_queue.is_empty()
+                            || !injector.is_empty()
+                            || !high_priority_injector.is_empty()
+                        {
+                            sleepers_bitset[segment_idx].fetch_and(!bit_mask, Ordering::SeqCst);
                             backoff.reset();
                             continue;
                         }
 
                         local_parker.park();
-                        
-                        // Woke up
-                        sleepers_count.fetch_sub(1, Ordering::SeqCst);
-                        is_sleeping[worker_id].store(false, Ordering::SeqCst);
+
+                        // Woke up - clear bit just in case we were woken spuriously or by a non-claiming wake
+                        // (Though wake_one usually clears strictly before unparking)
+                        sleepers_bitset[segment_idx].fetch_and(!bit_mask, Ordering::SeqCst);
 
                         // After waking, we reset backoff to `snooze` level?
                         // No, if we woke up, we presumably have work. Reset fully.
@@ -705,8 +709,8 @@ pub struct WorkerPool {
     #[allow(dead_code)]
     has_work: Arc<Vec<CachePadded<AtomicBool>>>,
     #[allow(dead_code)]
-    is_sleeping: Arc<Vec<CachePadded<AtomicBool>>>,
-    sleepers_count: Arc<CachePadded<AtomicUsize>>,
+    sleepers_bitset: Arc<Vec<CachePadded<AtomicUsize>>>,
+    wakeup_cursor: Arc<CachePadded<AtomicUsize>>,
     // _fiber_pool: Arc<FiberPool>, // Removed as it is now thread-local
 }
 
@@ -754,7 +758,7 @@ impl WorkerPool {
         let active_workers = Arc::new(CachePadded::new(AtomicUsize::new(0)));
         let frame_index = Arc::new(CachePadded::new(AtomicU64::new(0)));
         let topology = Arc::new(crate::topology::Topology::detect());
-        
+
         // Create parkers and unparkers for each worker
         let mut parkers = Vec::with_capacity(num_threads);
         let mut unparkers = Vec::with_capacity(num_threads);
@@ -767,14 +771,20 @@ impl WorkerPool {
 
         // Load-Aware Stealing: Flags for each worker
         let mut has_work_vec = Vec::with_capacity(num_threads);
-        let mut is_sleeping_vec = Vec::with_capacity(num_threads);
         for _ in 0..num_threads {
             has_work_vec.push(CachePadded::new(AtomicBool::new(false)));
-            is_sleeping_vec.push(CachePadded::new(AtomicBool::new(false)));
         }
         let has_work = Arc::new(has_work_vec);
-        let is_sleeping = Arc::new(is_sleeping_vec);
-        let sleepers_count = Arc::new(CachePadded::new(AtomicUsize::new(0)));
+
+        // Bitset for sleepers: 1 bit per worker
+        let num_segments = num_threads.div_ceil(64);
+        let mut sleepers_vec = Vec::with_capacity(num_segments);
+        for _ in 0..num_segments {
+            sleepers_vec.push(CachePadded::new(AtomicUsize::new(0)));
+        }
+        let sleepers_bitset = Arc::new(sleepers_vec);
+        // Cursor for round-robin wakeup scanning
+        let wakeup_cursor = Arc::new(CachePadded::new(AtomicUsize::new(0)));
 
         // We no longer create a global FiberPool here.
         // It is created lazily in each worker thread.
@@ -856,11 +866,11 @@ impl WorkerPool {
 
         // Spawn workers
         let mut parkers_iter = parkers.into_iter();
-        
+
         for (id, local_queue) in local_queues.into_iter().enumerate() {
             let core_id = mapped_cores.get(id).copied().flatten();
             let local_parker = parkers_iter.next().unwrap();
-            
+
             workers.push(Worker::new(WorkerParams {
                 id,
                 local_queue,
@@ -881,8 +891,8 @@ impl WorkerPool {
                 topology: Arc::clone(&topology),
                 parker: Arc::clone(&parker),
                 local_parker,
-                is_sleeping: Arc::clone(&is_sleeping),
-                sleepers_count: Arc::clone(&sleepers_count),
+                sleepers_bitset: Arc::clone(&sleepers_bitset),
+                wakeup_cursor: Arc::clone(&wakeup_cursor),
                 has_work: Arc::clone(&has_work),
                 #[cfg(feature = "metrics")]
                 metrics: metrics.as_ref().map(Arc::clone),
@@ -898,8 +908,8 @@ impl WorkerPool {
             frame_index,
             parker,
             has_work,
-            is_sleeping,
-            sleepers_count,
+            sleepers_bitset,
+            wakeup_cursor,
             // _fiber_pool: fiber_pool, // Removed
         }
     }
@@ -916,20 +926,48 @@ impl WorkerPool {
 
     /// Wakes up a single worker thread.
     pub fn wake_one(&self) {
-        // Optimization: Wake a sleeping worker if one exists.
-        // Fast path: if no one is sleeping, return immediately.
-        if self.sleepers_count.load(Ordering::SeqCst) == 0 {
-             return;
+        // Optimization: Find a sleeper using bitset O(1) ops (mostly).
+        // Fairness: Randomize start position using atomic cursor to avoid "thundering herd" on segment 0.
+        let num_segments = self.sleepers_bitset.len();
+        if num_segments == 0 {
+            return;
         }
 
-        for (id, flag) in self.is_sleeping.iter().enumerate() {
-            if flag.load(Ordering::SeqCst) {
-                self.parker.wake_target(id);
-                return;
+        // Fetch-add ensures round-robin distribution among concurrent wakers
+        let start_idx = self.wakeup_cursor.fetch_add(1, Ordering::Relaxed) % num_segments;
+
+        for i in 0..num_segments {
+            let seg_idx = (start_idx + i) % num_segments;
+            let segment = &self.sleepers_bitset[seg_idx];
+
+            let mut val = segment.load(Ordering::SeqCst);
+            while val > 0 {
+                let tz = val.trailing_zeros();
+                let worker_idx = seg_idx * 64 + (tz as usize);
+                let mask = 1 << tz;
+
+                // Try to claim this sleeper
+                let prev = segment.fetch_and(!mask, Ordering::SeqCst);
+                if (prev & mask) != 0 {
+                    // We successfully cleared the bit, meaning we are the one to wake it.
+                    self.parker.wake_target(worker_idx);
+                    return;
+                }
+
+                // Relaod to check if anyone else is left (loop again)
+                val = segment.load(Ordering::SeqCst);
             }
         }
-        // Fallback: wake any (e.g. 0) to ensure progress if we missed a flag race.
-        self.parker.wake_target(0);
+
+        // Fallback: wake any (e.g. 0) to ensure progress if we somehow missed something?
+        // Note: With robust bitset logic, missed wakeups should be rare.
+        // But the previous implementation had a fallback.
+        // If we found no bits set, then everyone is awake (or transiting).
+        // If everyone is awake, they will drain queues.
+        // So strict wakeup is not required if no bits are set.
+        // However, let's keep GlobalParker's heuristic fallback just in case.
+        // Actually, if we pass here, it means count == 0.
+        // self.parker.wake_one(); // This calls the fallback
     }
 
     /// Submits a single job to the scheduling system.

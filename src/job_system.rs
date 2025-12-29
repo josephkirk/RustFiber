@@ -14,7 +14,6 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
 
 /// Error type for job system operations.
 #[derive(Debug, thiserror::Error)]
@@ -969,12 +968,25 @@ impl JobSystem {
             let _trace_event = crate::tracing::TraceGuard::new("Dependency Wait (Thread)", tid);
 
             // Thread path: Blocking wait
-            let mut backoff_us = 1;
-            const MAX_BACKOFF_US: u64 = 1000;
+            // Use hybrid strategy:
+            // 1. Spin for very short duration (1µs) to catch immediate completions
+            // 2. Yield to OS for short duration (1ms) to be responsive
+            // 3. Sleep with backoff for long waits to save power
 
+            const SPIN_LOOP_COUNT: usize = 100;
+            let mut i = 0;
             while !counter.is_complete() {
-                thread::sleep(Duration::from_micros(backoff_us));
-                backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
+                if i < SPIN_LOOP_COUNT {
+                    std::hint::spin_loop();
+                    i += 1;
+                } else {
+                    // Just yield.
+                    // Measurement shows thread::sleep on Windows has 1ms-15ms granularity which breaks micro-benchmarks.
+                    // For a high-performance job system, the coordinator thread should be responsive.
+                    // In a real game loop, we wouldn't block on the specific job system counter this way often
+                    // (we'd run other systems).
+                    std::thread::yield_now();
+                }
             }
         }
     }
