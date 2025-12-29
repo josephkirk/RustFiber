@@ -1,14 +1,14 @@
 # RustFiber Benchmarks
 
-This document describes the benchmark suite for RustFiber, including criterion micro-benchmarks and the legacy benchmark runner.
+This document describes the criterion benchmark suite for RustFiber.
 
 ## Quick Start
 
 ```bash
-# Run all criterion micro-benchmarks
+# Run all criterion benchmarks
 cargo bench
 
-# Run specific criterion benchmark
+# Run specific benchmark
 cargo bench --bench fiber_switch
 cargo bench --bench throughput
 cargo bench --bench latency
@@ -25,9 +25,9 @@ open target/criterion/report/index.html
 
 ---
 
-## Criterion Micro-Benchmarks
+## Benchmarks Overview
 
-Located in `benches/`, these provide statistically rigorous nanosecond-precision measurements.
+All benchmarks are located in `benches/` and use the [criterion](https://bheisler.github.io/criterion.rs/book/) framework for statistically rigorous measurements.
 
 ### `fiber_switch.rs` — Context Switch Latency
 
@@ -138,75 +138,6 @@ Measures JobSystem initialization time.
 
 ---
 
-
-## Legacy Benchmark Suite
-
-Located in `src/benchmarks/`, run via the `benchmarks` binary.
-
-### Available Benchmarks
-
-| Benchmark | File | Description |
-|-----------|------|-------------|
-| **Empty Job Latency** | `latency.rs` | Measures scheduling latency for empty jobs at various batch sizes |
-| **Throughput** | `throughput.rs` | Measures jobs/second throughput |
-| **Producer-Consumer** | `producer_consumer.rs` | Tests synchronized producer-consumer patterns |
-| **Work-Stealing Stress** | `stress.rs` | Stresses work-stealing with steal success/failure tracking |
-| **Transform Hierarchy** | `transform.rs` | Simulates game engine transform hierarchy updates |
-| **NAS Benchmarks** | `nas_benchmarks.rs` | Scientific computing patterns (CG, MG, EP) |
-| **QuickSort** | `quicksort.rs` | Parallel divide-and-conquer sorting |
-| **Allocation** | `allocation.rs` | Tests frame allocator performance |
-| **Startup Latency** | `startup_latency.rs` | Measures JobSystem initialization time |
-
-### Running the Legacy Suite
-
-```bash
-# Build release binary
-cargo build --release --bin benchmarks
-
-# Run all benchmarks
-./target/release/benchmarks
-
-# Run specific benchmark
-./target/release/benchmarks --only "Empty Job Latency"
-
-# Run with custom thread count
-./target/release/benchmarks --threads 8
-
-# Compare across core counts
-./target/release/benchmarks --compare-cores
-```
-
-### Visualization
-
-```bash
-# Generate graphs from benchmark results
-python scripts/run_benchmarks.py
-
-# Graphs are saved to docs/benchmarks/
-```
-
----
-
-## Benchmark Architecture
-
-### Criterion vs Custom Runner
-
-| Feature | Criterion (`benches/`) | Custom (`src/benchmarks/`) |
-|---------|------------------------|----------------------------|
-| Statistical rigor | ✅ Automatic | Manual |
-| Nanosecond precision | ✅ Yes | Millisecond |
-| Regression tracking | ✅ Built-in | Manual comparison |
-| Visualization | HTML reports | Python matplotlib |
-| Scaling sweeps | Manual | ✅ Automatic |
-| Real workloads | Micro only | ✅ Application patterns |
-
-### When to Use Each
-
-- **Criterion**: For micro-benchmarking specific operations (context switch, job spawn)
-- **Custom Runner**: For application-level patterns (game loops, scientific computing)
-
----
-
 ## Interpreting Results
 
 ### Latency Benchmarks
@@ -231,8 +162,6 @@ python scripts/run_benchmarks.py
 
 ## Adding New Benchmarks
 
-### Criterion Benchmark
-
 1. Create `benches/my_benchmark.rs`
 2. Add to `Cargo.toml`:
    ```toml
@@ -253,13 +182,6 @@ python scripts/run_benchmarks.py
    criterion_group!(benches, my_bench);
    criterion_main!(benches);
    ```
-
-### Custom Benchmark
-
-1. Create `src/benchmarks/my_benchmark.rs`
-2. Add module to `src/benchmarks/mod.rs`
-3. Register in `src/benchmarks/main.rs`
-4. Return `BenchmarkResult` with data points
 
 ---
 
