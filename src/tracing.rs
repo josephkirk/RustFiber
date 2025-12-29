@@ -34,7 +34,7 @@ lazy_static::lazy_static! {
 /// Registers the current thread's buffer for global export.
 /// Should be called by each worker thread at startup.
 pub fn register_thread() {
-    // This is a bit tricky with thread-locals. 
+    // This is a bit tricky with thread-locals.
     // We'll collect the buffers at the end instead.
 }
 
@@ -71,14 +71,14 @@ pub fn export_to_file(path: &str) -> std::io::Result<()> {
     let mut writer = BufWriter::new(file);
 
     let buffers = ALL_BUFFERS.lock().unwrap();
-    
-    write!(writer, "[\n")?;
+
+    writeln!(writer, "[")?;
     let mut first = true;
 
     for buffer in buffers.iter() {
         for event in buffer {
             if !first {
-                write!(writer, ",\n")?;
+                writeln!(writer, ",")?;
             }
             first = false;
 

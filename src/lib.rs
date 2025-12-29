@@ -183,11 +183,11 @@ pub mod fiber;
 pub mod fiber_pool;
 pub mod job;
 pub mod job_system;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod topology;
 pub mod tracing;
 pub mod worker;
-#[cfg(feature = "metrics")]
-pub mod metrics;
 
 use serde::{Deserialize, Serialize};
 
@@ -211,7 +211,7 @@ pub enum PinningStrategy {
 pub use context::Context;
 pub use counter::Counter;
 pub use job::Job;
-pub use job_system::{JobSystem, JobSystemBuilder, JobSystemError, Partitioner, GranularityHint};
+pub use job_system::{GranularityHint, JobSystem, JobSystemBuilder, JobSystemError, Partitioner};
 
 #[cfg(test)]
 mod tests;

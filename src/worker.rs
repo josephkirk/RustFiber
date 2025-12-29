@@ -48,7 +48,10 @@ impl GlobalParker {
     pub(crate) fn park(&self) {
         let guard = self.lock.lock().unwrap();
         self.sleepers.fetch_add(1, Ordering::SeqCst);
-        let _result = self.cvar.wait_timeout(guard, std::time::Duration::from_millis(1)).unwrap();
+        let _result = self
+            .cvar
+            .wait_timeout(guard, std::time::Duration::from_millis(1))
+            .unwrap();
         self.sleepers.fetch_sub(1, Ordering::SeqCst);
     }
 
@@ -271,11 +274,10 @@ impl Worker {
 
         // Init backoff outside the loop so it persists across iterations
         let backoff = Backoff::new();
-        
+
         // Initialize RNG for randomized back-off
         // We use SmallRng for performance as we might call it frequently in the idle loop
         let mut _rng = rand::rngs::SmallRng::from_rng(&mut rand::rng());
-
 
         // Track local frame index to detect changes
         let mut local_frame_index = frame_index.load(Ordering::Relaxed);
@@ -295,7 +297,7 @@ impl Worker {
                 // SAFETY: We assume the user guarantees all jobs from the previous frame are done
                 // before incrementing the frame index.
                 /*unsafe {*/
-                    allocator.reset();
+                allocator.reset();
                 /*}*/
                 local_frame_index = global_frame_index;
             }
@@ -303,7 +305,7 @@ impl Worker {
             // Tiered Spillover Logic: Stay dormant if load is below threshold
             if tier > 1 && active_workers.load(Ordering::Relaxed) < threshold && injector.is_empty()
             {
-                // park logic handles this naturally now, but explicit check saves mutex 
+                // park logic handles this naturally now, but explicit check saves mutex
                 parker.park();
                 continue;
             }
@@ -330,12 +332,12 @@ impl Worker {
                         metrics.local_queue_pops.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                
+
                 // Load-Aware: If local queue is empty, update flag
                 if j.is_none() {
-                     has_work[worker_id].store(false, Ordering::Relaxed);
+                    has_work[worker_id].store(false, Ordering::Relaxed);
                 }
-                
+
                 j
             })
             .or_else(|| {
@@ -348,14 +350,16 @@ impl Worker {
                         if !has_work[*victim_id].load(Ordering::Relaxed) {
                             return crossbeam::deque::Steal::Empty;
                         }
-                        
+
                         steal_attempted = true;
                         let result = s.steal_batch_and_pop(&local_queue);
                         #[cfg(feature = "metrics")]
                         if let Some(metrics) = &metrics {
                             match &result {
                                 crossbeam::deque::Steal::Success(_) => {
-                                    metrics.worker_steals_success.fetch_add(1, Ordering::Relaxed);
+                                    metrics
+                                        .worker_steals_success
+                                        .fetch_add(1, Ordering::Relaxed);
                                     metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
                                     // We stole work and populated our queue
                                     has_work[worker_id].store(true, Ordering::Relaxed);
@@ -383,45 +387,34 @@ impl Worker {
                     // We already counted individual failures above, so this is redundant
                 }
 
-                steal_result
-                    .or_else(|| {
-                        // If stealing failed, try the global injector
-                        let mut retry_count = 0;
-                        const MAX_RETRIES: usize = 3;
+                steal_result.or_else(|| {
+                    // If stealing failed, try the global injector
+                    let mut retry_count = 0;
+                    const MAX_RETRIES: usize = 3;
 
-                        loop {
-                            let injector_result = injector.steal_batch_and_pop(&local_queue);
-                            #[cfg(feature = "metrics")]
-                            if let Some(metrics) = &metrics {
-                                match &injector_result {
-                                    crossbeam::deque::Steal::Success(_) => {
-                                        metrics.injector_steals_success.fetch_add(1, Ordering::Relaxed);
-                                        metrics.global_injector_pops.fetch_add(1, Ordering::Relaxed);
-                                        metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
-                                        // We have work now
-                                        has_work[worker_id].store(true, Ordering::Relaxed);
-                                        // Note: No wake_one here - 1ms polling handles discovery
-                                    }
-                                    crossbeam::deque::Steal::Empty => {
-                                        // Empty injector is normal during idle - not a failure
-                                        break;
-                                    }
-                                    crossbeam::deque::Steal::Retry => {
-                                        metrics.injector_steals_retry.fetch_add(1, Ordering::Relaxed);
-                                        retry_count += 1;
-                                        if retry_count >= MAX_RETRIES {
-                                            // For injector contention, we yield immediately
-                                            std::thread::yield_now();
-                                            break;
-                                        }
-                                    }
+                    loop {
+                        let injector_result = injector.steal_batch_and_pop(&local_queue);
+                        #[cfg(feature = "metrics")]
+                        if let Some(metrics) = &metrics {
+                            match &injector_result {
+                                crossbeam::deque::Steal::Success(_) => {
+                                    metrics
+                                        .injector_steals_success
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    metrics.global_injector_pops.fetch_add(1, Ordering::Relaxed);
+                                    metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                                    // We have work now
+                                    has_work[worker_id].store(true, Ordering::Relaxed);
+                                    // Note: No wake_one here - 1ms polling handles discovery
                                 }
-                            }
-
-                            match injector_result {
-                                crossbeam::deque::Steal::Success(job) => return Some(job),
-                                crossbeam::deque::Steal::Empty => break,
+                                crossbeam::deque::Steal::Empty => {
+                                    // Empty injector is normal during idle - not a failure
+                                    break;
+                                }
                                 crossbeam::deque::Steal::Retry => {
+                                    metrics
+                                        .injector_steals_retry
+                                        .fetch_add(1, Ordering::Relaxed);
                                     retry_count += 1;
                                     if retry_count >= MAX_RETRIES {
                                         // For injector contention, we yield immediately
@@ -431,8 +424,22 @@ impl Worker {
                                 }
                             }
                         }
-                        None
-                    })
+
+                        match injector_result {
+                            crossbeam::deque::Steal::Success(job) => return Some(job),
+                            crossbeam::deque::Steal::Empty => break,
+                            crossbeam::deque::Steal::Retry => {
+                                retry_count += 1;
+                                if retry_count >= MAX_RETRIES {
+                                    // For injector contention, we yield immediately
+                                    std::thread::yield_now();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    None
+                })
             });
 
             match job {
@@ -481,7 +488,7 @@ impl Worker {
                             let job = Job {
                                 work,
                                 counter,
-                                 priority,
+                                priority,
                             };
 
                             // Use local queue as scheduler for immediate wakeup locality if strategy permits
@@ -537,28 +544,34 @@ impl Worker {
                                         if job.priority == crate::job::JobPriority::High {
                                             #[cfg(feature = "metrics")]
                                             if let Some(metrics) = &metrics {
-                                                metrics.global_injector_pushes.fetch_add(1, Ordering::Relaxed);
+                                                metrics
+                                                    .global_injector_pushes
+                                                    .fetch_add(1, Ordering::Relaxed);
                                             }
                                             high_priority_injector.push(job);
                                         } else {
                                             #[cfg(feature = "metrics")]
                                             if let Some(metrics) = &metrics {
-                                                metrics.global_injector_pushes.fetch_add(1, Ordering::Relaxed);
+                                                metrics
+                                                    .global_injector_pushes
+                                                    .fetch_add(1, Ordering::Relaxed);
                                             }
                                             injector.push(job);
-                                         }
-                                         // Note: No wake_one - 1ms polling handles discovery
+                                        }
+                                        // Note: No wake_one - 1ms polling handles discovery
                                     }
                                     _ => {
                                         // Keep local for other strategies
                                         #[cfg(feature = "metrics")]
                                         if let Some(metrics) = &metrics {
-                                            metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
+                                            metrics
+                                                .local_queue_pushes
+                                                .fetch_add(1, Ordering::Relaxed);
                                         }
                                         local_queue.push(job);
-                                         // Load-Aware: We have new work
-                                         has_work[worker_id].store(true, Ordering::Relaxed);
-                                         // Note: No wake_one - 1ms polling handles discovery
+                                        // Load-Aware: We have new work
+                                        has_work[worker_id].store(true, Ordering::Relaxed);
+                                        // Note: No wake_one - 1ms polling handles discovery
                                     }
                                 }
                             }
@@ -599,18 +612,18 @@ impl Worker {
                         // Deep Idle: Signal-based Parking
                         // Mitigation for "Thundering Herd": When multiple workers are idle and contending
                         // for the same empty victims, we must desynchronize them.
-                        
+
                         // Parking Strategy:
                         // - Instead of spinning or sleeping blindly, we park the thread (block).
                         // - Threads are woken up by `notify_one` when new work is pushed.
                         // - This eliminates "Empty Attempts" almost entirely as workers only wake when work exists.
-                        
+
                         // Parking Strategy via Semaphore:
                         // - Threads block indefinitely until `wake_one` increments the signal count.
                         // - No polling, no timeout.
                         parker.park();
-                        
-                        // After waking, we reset backoff to `snooze` level? 
+
+                        // After waking, we reset backoff to `snooze` level?
                         // No, if we woke up, we presumably have work. Reset fully.
                         backoff.reset();
                     } else {
@@ -646,6 +659,8 @@ pub struct WorkerPool {
     active_workers: Arc<CachePadded<AtomicUsize>>,
     frame_index: Arc<CachePadded<AtomicU64>>,
     parker: Arc<GlobalParker>,
+    /// Load-aware stealing flags, used internally by workers but owned here.
+    #[allow(dead_code)]
     has_work: Arc<Vec<CachePadded<AtomicBool>>>,
     // _fiber_pool: Arc<FiberPool>, // Removed as it is now thread-local
 }
@@ -653,7 +668,13 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Creates a new worker pool with work-stealing queues.
     pub fn new(num_threads: usize, config: crate::job_system::FiberConfig) -> Self {
-        Self::new_with_strategy(num_threads, PinningStrategy::None, config, #[cfg(feature = "metrics")] None)
+        Self::new_with_strategy(
+            num_threads,
+            PinningStrategy::None,
+            config,
+            #[cfg(feature = "metrics")]
+            None,
+        )
     }
 
     /// Creates a new worker pool with optional CPU affinity pinning.
@@ -867,21 +888,23 @@ impl WorkerPool {
 
     /// Submits multiple jobs in a batch to reduce contention.
     pub fn submit_batch(&self, jobs: Vec<Job>) {
-        if jobs.is_empty() { return; }
+        if jobs.is_empty() {
+            return;
+        }
 
         let jobs_or_consumed = LOCAL_DEQUE.with(|tls| {
-             if let Some(deque_ptr) = tls.get() {
-                 // SAFETY: see submit()
-                 unsafe {
-                     let deque = &*deque_ptr;
-                     for job in jobs {
-                         deque.push(job);
-                     }
-                 }
-                 None
-             } else {
-                 Some(jobs)
-             }
+            if let Some(deque_ptr) = tls.get() {
+                // SAFETY: see submit()
+                unsafe {
+                    let deque = &*deque_ptr;
+                    for job in jobs {
+                        deque.push(job);
+                    }
+                }
+                None
+            } else {
+                Some(jobs)
+            }
         });
 
         let jobs = match jobs_or_consumed {
@@ -901,7 +924,7 @@ impl WorkerPool {
                 self.injector.push(job);
             }
         }
-        
+
         // Wake up multiple workers to handle the batch.
         // We wake up to 'jobs.len()' workers (clamped), utilizing the Semaphore count.
         // This ensures enough capacity is activated immediately.
@@ -931,7 +954,7 @@ impl WorkerPool {
         std::thread::sleep(std::time::Duration::from_millis(10));
         self.shutdown
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        
+
         // Wake up all workers so they can see the shutdown flag
         self.parker.wake_all();
 

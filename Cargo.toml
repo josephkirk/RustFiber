@@ -29,9 +29,46 @@ path = "src/lib.rs"
 name = "rustfiber"
 path = "src/main.rs"
 
-[[bin]]
-name = "benchmarks"
-path = "src/benchmarks/main.rs"
+[dev-dependencies]
+criterion = "0.8.1"
+criterion-plot = "0.8.1"
+num_cpus = "1.16"
+
+[[bench]]
+name = "fiber_switch"
+harness = false
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "latency"
+harness = false
+
+[[bench]]
+name = "work_stealing"
+harness = false
+
+[[bench]]
+name = "scientific"
+harness = false
+
+[[bench]]
+name = "transform"
+harness = false
+
+[[bench]]
+name = "producer_consumer"
+harness = false
+
+[[bench]]
+name = "allocation"
+harness = false
+
+[[bench]]
+name = "startup"
+harness = false
 
 [profile.release]
 lto = "fat"
