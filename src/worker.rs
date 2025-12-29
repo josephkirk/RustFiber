@@ -357,12 +357,9 @@ impl Worker {
                                 crossbeam::deque::Steal::Success(_) => {
                                     metrics.worker_steals_success.fetch_add(1, Ordering::Relaxed);
                                     metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
-                                    // We stole work and populated our queue (steal_batch), so we have work now
+                                    // We stole work and populated our queue
                                     has_work[worker_id].store(true, Ordering::Relaxed);
-                                    
-                                    // Cascade Wakeup: We stole a batch, potentially more than we can handle.
-                                    // Wake another worker to help steal from us or others.
-                                    parker.wake_one();
+                                    // Note: No wake_one here - 1ms polling handles discovery
                                 }
                                 crossbeam::deque::Steal::Empty => {
                                     // Stale has_work flag - victim finished before we arrived.
@@ -403,9 +400,7 @@ impl Worker {
                                         metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
                                         // We have work now
                                         has_work[worker_id].store(true, Ordering::Relaxed);
-                                        
-                                        // Cascade Wakeup from Global:
-                                        parker.wake_one();
+                                        // Note: No wake_one here - 1ms polling handles discovery
                                     }
                                     crossbeam::deque::Steal::Empty => {
                                         // Empty injector is normal during idle - not a failure
@@ -552,8 +547,7 @@ impl Worker {
                                             }
                                             injector.push(job);
                                          }
-                                         // Signal potential sleepers that global work is available
-                                         parker.wake_one();
+                                         // Note: No wake_one - 1ms polling handles discovery
                                     }
                                     _ => {
                                         // Keep local for other strategies
@@ -564,9 +558,7 @@ impl Worker {
                                         local_queue.push(job);
                                          // Load-Aware: We have new work
                                          has_work[worker_id].store(true, Ordering::Relaxed);
-                                         
-                                        // Signal potential sleepers that *local* work is available (which can be stolen)
-                                        parker.wake_one();
+                                         // Note: No wake_one - 1ms polling handles discovery
                                     }
                                 }
                             }
