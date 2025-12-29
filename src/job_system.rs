@@ -11,6 +11,7 @@ use crate::job::Job;
 use crate::worker::{WorkerPool, WorkerPoolError};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(any(feature = "metrics", test))]
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -210,6 +211,13 @@ impl JobSystemBuilder {
 }
 
 impl JobSystem {
+    /// Wakes up a sleeping worker thread.
+    ///
+    /// This is useful when jobs are added to local queues bypassing the standard submit methods.
+    pub fn wake_one(&self) {
+        self.worker_pool.wake_one();
+    }
+
     /// Creates a new job system with the specified number of worker threads.
     ///
     /// The number of threads typically matches the number of CPU cores

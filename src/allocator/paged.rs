@@ -55,7 +55,7 @@ impl PagedFrameAllocator {
         let size = layout.size();
 
         // 1. Try to align in current page
-        let current_ptr = self.pages[self.current_page_index].as_ptr() as usize;
+        let _current_ptr = self.pages[self.current_page_index].as_ptr() as usize;
         let mut aligned_offset = (self.offset + align - 1) & !(align - 1);
 
         // Check if fits in current page
@@ -77,7 +77,7 @@ impl PagedFrameAllocator {
             
             // Reset offset for new page
             self.offset = 0;
-            aligned_offset = 0; // First byte is always aligned to page alignment (usually high enough)
+            let _ = 0; // optimized out
              
             // Verify alignment of page start (Box allocation usually aligned to max align)
              let new_page_ptr = self.pages[self.current_page_index].as_ptr() as usize;
