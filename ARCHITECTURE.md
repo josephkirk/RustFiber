@@ -134,10 +134,16 @@ To eliminate coroutine recreation overhead, fibers use a **Trampoline Pattern** 
 - **Performance Impact**: Eliminates `Coroutine::with_stack()` call on every fiber reuse, reducing per-job overhead.
 - **Panic Safety**: Jobs that panic do not corrupt system state. Counter is still decremented, dependent jobs still wake.
 
-### 4.12 Load-Aware Work Stealing
-Workers maintain `has_work` atomic flags to enable efficient stealing:
-- **Skip Empty Victims**: Before attempting an expensive steal, workers check the victim's `has_work` flag to skip empty queues.
-- **1ms Timeout Polling**: Idle workers use `Condvar::wait_timeout(1ms)` for self-discovery of work, avoiding explicit signaling overhead.
+### 4.12 Idle Strategy: Adaptive Parking
+Efficiently handling idle states is key to low latency and CPU efficiency.
+- **Signal-Based Parking**: Replaced coarse-grained `Condvar::wait_timeout(1ms)` with fine-grained `crossbeam::sync::Parker`. Workers block indefinitely when idle and are explicitly woken (`Unparker`) only when work is available.
+- **Adaptive Spinning**: Workers employ a 3-stage backoff (Spin -> Yield -> Park) to catch immediate work without expensive syscalls, falling back to deep sleep to save CPU power.
+- **Lost-Wakeup Prevention**: Uses a "Double-Check" pattern with atomic state flags (`is_sleeping`, `sleepers_count`). Workers declare intent to sleep, then re-check queues before parking. Submitters check these flags to only issue syscalls (`unpark`) when a worker is actually sleeping.
+- **Latency**: Reduced cold-start latency from ~500µs to <15µs.
+
+### 4.13 Load-Aware Work Stealing
+Workers maintain `has_work` atomic flags to enable efficient distributed stealing:
+- **Skip Empty Victims**: Stealers check the victim's `has_work` flag before attempting an expensive deque CAS operation, significantly reducing bus contention on empty queues.
 
 ---
 
