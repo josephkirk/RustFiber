@@ -9,10 +9,10 @@ use crate::PinningStrategy;
 use crate::counter::Counter;
 use crate::job::Job;
 use crate::worker::{WorkerPool, WorkerPoolError};
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(any(feature = "metrics", test))]
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -60,20 +60,20 @@ impl Default for FiberConfig {
 /// Hints for the auto-partitioning algorithm in `parallel_for` methods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GranularityHint {
-    /// Very cheap per-element work (< 100 cycles). 
+    /// Very cheap per-element work (< 100 cycles).
     /// Uses larger batches to minimize scheduling overhead.
     /// Target: 2 batches per worker.
     Trivial,
-    
+
     /// Light computation (100-1000 cycles). Default behavior.
     /// Target: 4 batches per worker.
     Light,
-    
+
     /// Moderate computation (1K-10K cycles).
     /// Uses smaller batches for better load balancing.
     /// Target: 8 batches per worker.
     Moderate,
-    
+
     /// Heavy computation (> 10K cycles).
     /// Uses fine-grained batches.
     /// Target: 16 batches per worker.
@@ -614,8 +614,6 @@ impl JobSystem {
         counter
     }
 
-
-
     /// Executes a parallel for-loop over a range, split into batches.
     ///
     /// This method automatically divides the range into chunks of size `batch_size`
@@ -834,7 +832,7 @@ impl JobSystem {
             }
             Partitioner::Static(size) => size.max(1),
         };
-        
+
         self.parallel_for_chunked(range, batch_size, body)
     }
 

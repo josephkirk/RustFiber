@@ -3,7 +3,6 @@
 //! This module provides lightweight execution contexts (coroutines) for jobs,
 //! allowing them to yield execution without blocking the OS thread.
 
-
 use crate::job::Job;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 
@@ -97,7 +96,8 @@ pub struct Fiber {
     coroutine: Option<Coroutine<FiberInput, YieldType, (), &'static mut DefaultStack>>,
 
     /// The stack backing the coroutine.
-    /// Owned here to allow reuse.
+    /// Owned here to ensure proper drop order: coroutine first, then stack.
+    #[allow(dead_code)]
     stack: Box<DefaultStack>,
 
     /// The intrusive node used when the fiber is waiting.
@@ -151,7 +151,7 @@ impl Fiber {
         // Phase B: Synchronization (counter decrement via RAII guard)
         // Phase C: Recycling (yield Complete, loop for next job)
         let coroutine = Coroutine::with_stack(stack_ref, move |yielder, mut input: FiberInput| {
-            use std::panic::{catch_unwind, AssertUnwindSafe};
+            use std::panic::{AssertUnwindSafe, catch_unwind};
 
             loop {
                 if let FiberInput::Start(
@@ -263,7 +263,8 @@ impl Fiber {
         self.stack_prefaulted = false;
 
         // Reset suspension state
-        self.is_suspended.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.is_suspended
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // NOTE: With Trampoline Pattern, coroutine stays alive and loops.
         // No recreation needed - this is the key optimization!
