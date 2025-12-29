@@ -70,5 +70,39 @@ fn bench_scheduling_latency(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_scheduling_latency);
+fn bench_cold_latency(c: &mut Criterion) {
+    let num_threads = num_cpus::get();
+    let system = JobSystem::new(num_threads);
+    let mut group = c.benchmark_group("cold_latency");
+    // Reduce sample size for slow benchmark
+    group.sample_size(20);
+
+    group.bench_function("cold_wakeup", |b| {
+        b.iter_custom(|iters| {
+            let mut total_wakeup = std::time::Duration::ZERO;
+            for _ in 0..iters {
+                // Sleep 2ms to ensure workers park
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                
+                let start = std::time::Instant::now();
+                let wakeup_latency = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let wakeup_clone = wakeup_latency.clone();
+                
+                let counter = system.run(move || {
+                    let elapsed = start.elapsed().as_nanos() as u64;
+                    wakeup_clone.store(elapsed, std::sync::atomic::Ordering::Relaxed);
+                    std::hint::black_box(());
+                });
+                system.wait_for_counter(&counter);
+                
+                let nanos = wakeup_latency.load(std::sync::atomic::Ordering::Relaxed);
+                total_wakeup += std::time::Duration::from_nanos(nanos);
+            }
+            total_wakeup
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_scheduling_latency, bench_cold_latency);
 criterion_main!(benches);

@@ -26,46 +26,54 @@ pub enum WorkerPoolError {
     WorkerPanic { failed_count: usize },
 }
 
+use crossbeam::sync::{Parker, Unparker};
+
 /// Global parking mechanism for worker threads.
-/// Uses 1ms timeout polling for efficient work discovery without explicit signaling overhead.
+/// Uses signal-based parking (Parker/Unparker) for low-latency wakeups.
 pub(crate) struct GlobalParker {
-    lock: std::sync::Mutex<()>,
-    cvar: std::sync::Condvar,
-    sleepers: AtomicUsize,
+    unparkers: Vec<Unparker>,
+    next_victim: AtomicUsize,
+    // Track sleeping workers to avoid unnecessary wakeups.
+    // Bitset or list could be better, but simple atomic flags per worker are passed separately.
+    // Here we just hold the handles.
 }
 
 impl GlobalParker {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(unparkers: Vec<Unparker>) -> Self {
         Self {
-            lock: std::sync::Mutex::new(()),
-            cvar: std::sync::Condvar::new(),
-            sleepers: AtomicUsize::new(0),
+            unparkers,
+            next_victim: AtomicUsize::new(0),
         }
     }
 
-    /// Parks the current thread with a 1ms timeout.
-    /// This allows workers to self-discover work without explicit signaling.
-    pub(crate) fn park(&self) {
-        let guard = self.lock.lock().unwrap();
-        self.sleepers.fetch_add(1, Ordering::SeqCst);
-        let _result = self
-            .cvar
-            .wait_timeout(guard, std::time::Duration::from_millis(1))
-            .unwrap();
-        self.sleepers.fetch_sub(1, Ordering::SeqCst);
+    /// Wakes up *one* specific worker.
+    pub fn wake_target(&self, worker_id: usize) {
+        if let Some(u) = self.unparkers.get(worker_id) {
+            u.unpark();
+        }
     }
 
-    /// Wakes up *one* sleeping thread (if any).
+    /// Wakes up *one* worker using a round-robin strategy.
+    ///
+    /// This is used as a fallback when specific sleeping workers are not known
+    /// or to ensure liveness. For targeted wakeups, uses `wake_target`.
     pub fn wake_one(&self) {
-        if self.sleepers.load(Ordering::SeqCst) > 0 {
-            self.cvar.notify_one();
+        if self.unparkers.is_empty() {
+            return;
+        }
+        // Simple Round-Robin to ensure fairness/distribution of spurious wakeups
+        let idx = self.next_victim.fetch_add(1, Ordering::Relaxed) % self.unparkers.len();
+        if let Some(u) = self.unparkers.get(idx) {
+            u.unpark();
         }
     }
 
     /// Wakes up *all* sleeping threads.
     /// Used during shutdown.
     pub(crate) fn wake_all(&self) {
-        self.cvar.notify_all();
+        for u in &self.unparkers {
+            u.unpark();
+        }
     }
 }
 
@@ -131,6 +139,9 @@ pub(crate) struct WorkerParams {
     pub(crate) frame_index: Arc<CachePadded<AtomicU64>>,
     pub(crate) topology: Arc<crate::topology::Topology>,
     pub(crate) parker: Arc<GlobalParker>,
+    pub(crate) local_parker: Parker,
+    pub(crate) is_sleeping: Arc<Vec<CachePadded<AtomicBool>>>,
+    pub(crate) sleepers_count: Arc<CachePadded<AtomicUsize>>,
     pub(crate) has_work: Arc<Vec<CachePadded<AtomicBool>>>,
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Option<Arc<crate::metrics::Metrics>>,
@@ -202,6 +213,9 @@ impl Worker {
             frame_index,
             topology,
             parker,
+            local_parker,
+            is_sleeping,
+            sleepers_count,
             has_work,
             core_id: _,
             #[cfg(feature = "metrics")]
@@ -302,11 +316,12 @@ impl Worker {
                 local_frame_index = global_frame_index;
             }
 
-            // Tiered Spillover Logic: Stay dormant if load is below threshold
             if tier > 1 && active_workers.load(Ordering::Relaxed) < threshold && injector.is_empty()
             {
                 // park logic handles this naturally now, but explicit check saves mutex
-                parker.park();
+                // We mark as sleeping before parking? Or just park.
+                // Simple park for now.
+                local_parker.park();
                 continue;
             }
 
@@ -353,6 +368,13 @@ impl Worker {
 
                         steal_attempted = true;
                         let result = s.steal_batch_and_pop(&local_queue);
+                        if let crossbeam::deque::Steal::Success(_) = &result {
+                            has_work[worker_id].store(true, Ordering::Relaxed);
+                             // Cascading Wakeup: We stole a batch, so there is likely more work (in our queue now).
+                             // Wake another worker to help.
+                            parker.wake_one();
+                        }
+
                         #[cfg(feature = "metrics")]
                         if let Some(metrics) = &metrics {
                             match &result {
@@ -361,13 +383,9 @@ impl Worker {
                                         .worker_steals_success
                                         .fetch_add(1, Ordering::Relaxed);
                                     metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
-                                    // We stole work and populated our queue
-                                    has_work[worker_id].store(true, Ordering::Relaxed);
-                                    // Note: No wake_one here - 1ms polling handles discovery
                                 }
                                 crossbeam::deque::Steal::Empty => {
                                     // Stale has_work flag - victim finished before we arrived.
-                                    // Not counted as failure since we did check has_work.
                                 }
                                 crossbeam::deque::Steal::Retry => {
                                     metrics.worker_steals_retry.fetch_add(1, Ordering::Relaxed);
@@ -394,6 +412,15 @@ impl Worker {
 
                     loop {
                         let injector_result = injector.steal_batch_and_pop(&local_queue);
+                        if let crossbeam::deque::Steal::Success(_) = &injector_result {
+                            has_work[worker_id].store(true, Ordering::Relaxed);
+                            // Cascading Wakeup for injector stealing?
+                            // Injector is global, so leaving work there is fine, others can find it if woken?
+                            // But we just stole a batch. Our local queue is full.
+                            // We should wake others to steal from US (or injector).
+                            parker.wake_one();
+                        }
+
                         #[cfg(feature = "metrics")]
                         if let Some(metrics) = &metrics {
                             match &injector_result {
@@ -403,9 +430,6 @@ impl Worker {
                                         .fetch_add(1, Ordering::Relaxed);
                                     metrics.global_injector_pops.fetch_add(1, Ordering::Relaxed);
                                     metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
-                                    // We have work now
-                                    has_work[worker_id].store(true, Ordering::Relaxed);
-                                    // Note: No wake_one here - 1ms polling handles discovery
                                 }
                                 crossbeam::deque::Steal::Empty => {
                                     // Empty injector is normal during idle - not a failure
@@ -558,7 +582,8 @@ impl Worker {
                                             }
                                             injector.push(job);
                                         }
-                                        // Note: No wake_one - 1ms polling handles discovery
+                                        // Signal arrived work
+                                        parker.wake_one();
                                     }
                                     _ => {
                                         // Keep local for other strategies
@@ -621,7 +646,24 @@ impl Worker {
                         // Parking Strategy via Semaphore:
                         // - Threads block indefinitely until `wake_one` increments the signal count.
                         // - No polling, no timeout.
-                        parker.park();
+                        
+                        // Set state to Sleeping
+                        is_sleeping[worker_id].store(true, Ordering::SeqCst);
+                        sleepers_count.fetch_add(1, Ordering::SeqCst);
+                        
+                        // Double check work (prevent lost wakeup)
+                        if !local_queue.is_empty() || !injector.is_empty() || !high_priority_injector.is_empty() {
+                            sleepers_count.fetch_sub(1, Ordering::SeqCst); // Revert
+                            is_sleeping[worker_id].store(false, Ordering::SeqCst);
+                            backoff.reset();
+                            continue;
+                        }
+
+                        local_parker.park();
+                        
+                        // Woke up
+                        sleepers_count.fetch_sub(1, Ordering::SeqCst);
+                        is_sleeping[worker_id].store(false, Ordering::SeqCst);
 
                         // After waking, we reset backoff to `snooze` level?
                         // No, if we woke up, we presumably have work. Reset fully.
@@ -662,6 +704,9 @@ pub struct WorkerPool {
     /// Load-aware stealing flags, used internally by workers but owned here.
     #[allow(dead_code)]
     has_work: Arc<Vec<CachePadded<AtomicBool>>>,
+    #[allow(dead_code)]
+    is_sleeping: Arc<Vec<CachePadded<AtomicBool>>>,
+    sleepers_count: Arc<CachePadded<AtomicUsize>>,
     // _fiber_pool: Arc<FiberPool>, // Removed as it is now thread-local
 }
 
@@ -709,14 +754,27 @@ impl WorkerPool {
         let active_workers = Arc::new(CachePadded::new(AtomicUsize::new(0)));
         let frame_index = Arc::new(CachePadded::new(AtomicU64::new(0)));
         let topology = Arc::new(crate::topology::Topology::detect());
-        let parker = Arc::new(GlobalParker::new());
+        
+        // Create parkers and unparkers for each worker
+        let mut parkers = Vec::with_capacity(num_threads);
+        let mut unparkers = Vec::with_capacity(num_threads);
+        for _ in 0..num_threads {
+            let p = Parker::new();
+            unparkers.push(p.unparker().clone());
+            parkers.push(p);
+        }
+        let parker = Arc::new(GlobalParker::new(unparkers));
 
         // Load-Aware Stealing: Flags for each worker
         let mut has_work_vec = Vec::with_capacity(num_threads);
+        let mut is_sleeping_vec = Vec::with_capacity(num_threads);
         for _ in 0..num_threads {
             has_work_vec.push(CachePadded::new(AtomicBool::new(false)));
+            is_sleeping_vec.push(CachePadded::new(AtomicBool::new(false)));
         }
         let has_work = Arc::new(has_work_vec);
+        let is_sleeping = Arc::new(is_sleeping_vec);
+        let sleepers_count = Arc::new(CachePadded::new(AtomicUsize::new(0)));
 
         // We no longer create a global FiberPool here.
         // It is created lazily in each worker thread.
@@ -797,8 +855,12 @@ impl WorkerPool {
         };
 
         // Spawn workers
+        let mut parkers_iter = parkers.into_iter();
+        
         for (id, local_queue) in local_queues.into_iter().enumerate() {
             let core_id = mapped_cores.get(id).copied().flatten();
+            let local_parker = parkers_iter.next().unwrap();
+            
             workers.push(Worker::new(WorkerParams {
                 id,
                 local_queue,
@@ -818,6 +880,9 @@ impl WorkerPool {
                 frame_index: Arc::clone(&frame_index),
                 topology: Arc::clone(&topology),
                 parker: Arc::clone(&parker),
+                local_parker,
+                is_sleeping: Arc::clone(&is_sleeping),
+                sleepers_count: Arc::clone(&sleepers_count),
                 has_work: Arc::clone(&has_work),
                 #[cfg(feature = "metrics")]
                 metrics: metrics.as_ref().map(Arc::clone),
@@ -833,6 +898,8 @@ impl WorkerPool {
             frame_index,
             parker,
             has_work,
+            is_sleeping,
+            sleepers_count,
             // _fiber_pool: fiber_pool, // Removed
         }
     }
@@ -849,7 +916,20 @@ impl WorkerPool {
 
     /// Wakes up a single worker thread.
     pub fn wake_one(&self) {
-        self.parker.wake_one();
+        // Optimization: Wake a sleeping worker if one exists.
+        // Fast path: if no one is sleeping, return immediately.
+        if self.sleepers_count.load(Ordering::SeqCst) == 0 {
+             return;
+        }
+
+        for (id, flag) in self.is_sleeping.iter().enumerate() {
+            if flag.load(Ordering::SeqCst) {
+                self.parker.wake_target(id);
+                return;
+            }
+        }
+        // Fallback: wake any (e.g. 0) to ensure progress if we missed a flag race.
+        self.parker.wake_target(0);
     }
 
     /// Submits a single job to the scheduling system.
@@ -872,7 +952,7 @@ impl WorkerPool {
             Some(j) => j,
             None => {
                 // If we pushed locally, wake a sleeper
-                self.parker.wake_one();
+                self.wake_one();
                 return;
             }
         };
@@ -883,7 +963,7 @@ impl WorkerPool {
         } else {
             self.injector.push(job);
         }
-        self.parker.wake_one();
+        self.wake_one();
     }
 
     /// Submits multiple jobs in a batch to reduce contention.
@@ -910,7 +990,7 @@ impl WorkerPool {
         let jobs = match jobs_or_consumed {
             Some(j) => j,
             None => {
-                self.parker.wake_one();
+                self.wake_one();
                 return;
             }
         };
