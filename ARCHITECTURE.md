@@ -137,9 +137,11 @@ To eliminate coroutine recreation overhead, fibers use a **Trampoline Pattern** 
 ### 4.12 Idle Strategy: Adaptive Parking
 Efficiently handling idle states is key to low latency and CPU efficiency.
 - **Signal-Based Parking**: Replaced coarse-grained `Condvar::wait_timeout(1ms)` with fine-grained `crossbeam::sync::Parker`. Workers block indefinitely when idle and are explicitly woken (`Unparker`) only when work is available.
-- **Adaptive Spinning**: Workers employ a 3-stage backoff (Spin -> Yield -> Park) to catch immediate work without expensive syscalls, falling back to deep sleep to save CPU power.
-- **Lost-Wakeup Prevention**: Uses a "Double-Check" pattern with atomic state flags (`is_sleeping`, `sleepers_count`). Workers declare intent to sleep, then re-check queues before parking. Submitters check these flags to only issue syscalls (`unpark`) when a worker is actually sleeping.
-- **Latency**: Reduced cold-start latency from ~500µs to <15µs.
+- **Bitset-Based Wakeup**: Instead of iterating through all worker states (O(N)), the `wake_one` method scans a `sleepers_bitset` using `AtomicUsize` segments. This provides O(1) efficiency for finding a sleeping worker.
+- **Fairness & Randomization**: To prevent "Hot Spotting" (always waking Worker 0) and contention, the search start index is randomized using a round-robin atomic cursor.
+- **Adaptive Spinning**: Workers employ a 3-stage backoff (Spin -> Yield -> Park) to catch immediate work without expensive syscalls.
+- **Double-Check Pattern**: Prevents lost wakeups by re-checking queues after declaring intention to sleep (`sleepers_bitset`).
+- **Latency**: Reduced cold-start latency from ~500µs to <20µs.
 
 ### 4.13 Load-Aware Work Stealing
 Workers maintain `has_work` atomic flags to enable efficient distributed stealing:

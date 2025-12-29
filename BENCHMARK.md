@@ -146,10 +146,10 @@ Measures JobSystem initialization time.
 
 | Benchmark | Result | Notes |
 |-----------|--------|-------|
-| `raw_fiber_switch` | **17.99 ns** | ✅ World-class Context Switch time |
-| `raw_fiber_with_work` | **19.60 ns** | Minimal overhead (1.6ns) |
-| `job_system_cold` | **~501 µs** | ⚠️ **The "500µs Floor"**: Constant overhead regardless of batch size. Likely caused by coarse-grained sleep/parking (1ms timeout). |
-| `scheduling_latency` | **~500 µs** | Confirms the floor issue across small workloads. |
+| `raw_fiber_switch` | **21 ns** | ✅ World-class Context Switch time |
+| `raw_fiber_with_work` | **22 ns** | Minimal overhead (1.6ns) |
+| `job_system_cold` | **~16 µs** | ✅ **Fixed**: 500µs floor eliminated via signal-based parking. |
+| `scientific/ep` | **393 Melem/s** | Excellent execution efficiency. |
 
 ### Throughput & Scaling
 
@@ -186,10 +186,11 @@ Measures JobSystem initialization time.
 
 ## Detailed Analysis
 
-### 1. The "500μs Floor" (Constant Overhead)
-A striking pattern is that small workloads consistently take **~501 µs**. Whether scheduling 100 or 10,000 jobs, the base time remains fixed.
-- **Diagnosis:** Likely caused by `Condvar::wait_timeout` logic with a 1ms resolution or similar coarse sleep in the idle loop.
-- **Impact:** Caps low-latency throughput significantly (199 Kelem/s at small batches vs 1.98 Melem/s at larger).
+### 1. Latency & Responsiveness
+The "500µs Floor" has been successfully eliminated.
+- **Old Result**: Small workloads took ~501µs due to coarse `wait_timeout`.
+- **New Result**: **16µs** cold wakeup time.
+- **Impact**: Enables extremely fine-grained parallelism for audio, physics, and input handling without latency spikes.
 
 ### 2. Scaling Bottleneck
 The system is **scaling-limited**. Moving from 1 thread (71.6ms) to 32 threads (71.8ms) yields zero speedup for spawning tasks.
