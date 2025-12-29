@@ -142,29 +142,29 @@ Measures JobSystem initialization time.
 
 *Collected 2025-12-29*
 
-### Core Performance
+### Core Performance & Latency Issue
 
 | Benchmark | Result | Notes |
 |-----------|--------|-------|
-| `raw_fiber_switch` | **17.99 ns** | ✅ Meets <50ns target |
-| `raw_fiber_with_work` | **19.60 ns** | Minimal overhead |
-| `job_system_cold` | **501.65 µs** | Dominated by 1ms parking timeout |
+| `raw_fiber_switch` | **17.99 ns** | ✅ World-class Context Switch time |
+| `raw_fiber_with_work` | **19.60 ns** | Minimal overhead (1.6ns) |
+| `job_system_cold` | **~501 µs** | ⚠️ **The "500µs Floor"**: Constant overhead regardless of batch size. Likely caused by coarse-grained sleep/parking (1ms timeout). |
+| `scheduling_latency` | **~500 µs** | Confirms the floor issue across small workloads. |
 
-### Throughput
-
-| Benchmark | Throughput | Notes |
-|-----------|------------|-------|
-| `spawn_1m_jobs` (32 threads) | **13.68 M jobs/sec** | ✅ Exceeds 10M target |
-| `spawn_1m` (1 thread) | **13.95 M jobs/sec** | Sequential spawn bottleneck |
-| `spawn_1m` (8 threads) | **14.20 M jobs/sec** | Best scaling point |
-
-### Scientific Computing
+### Throughput & Scaling
 
 | Benchmark | Throughput | Notes |
 |-----------|------------|-------|
-| `ep/tasks/1M` | **393 Melem/s** | Embarrassingly parallel |
-| `mg/grid/256` | **5.12 Gelem/s** | Memory bandwidth limited |
-| `cg/size/100K` | **95.4 Melem/s** | Irregular access pattern |
+| `spawn_1m_jobs` (all) | **~14 M/s** | ⚠️ **Scaling-Limited**: Zero net speedup from 1 to 32 threads. |
+| `scaling_peak` | **8 threads** | Performance regresses beyond 8 threads (Global Lock/Queue contention). |
+
+### Scientific Workload Strengths
+
+| Benchmark | Throughput | Notes |
+|-----------|------------|-------|
+| `ep/tasks/1M` | **393 Melem/s** | Excellent execution efficiency once scheduled. |
+| `mg/grid/256` | **5.12 Gelem/s** | Massive throughput for heavy math. |
+| `work_stealing` | **Low** | Imbalanced workloads fall to ~8M/s (50x slower than EP), indicating aggressive thief overhead. |
 
 ### Application Patterns
 
@@ -181,6 +181,25 @@ Measures JobSystem initialization time.
 | `minimal_4` | **30.77 ms** | ⚠️ Higher than expected |
 | `default_16` | **30.88 ms** | Worker thread creation overhead |
 | `large_64` | **31.71 ms** | Fiber pool size has minimal impact |
+
+---
+
+## Detailed Analysis
+
+### 1. The "500μs Floor" (Constant Overhead)
+A striking pattern is that small workloads consistently take **~501 µs**. Whether scheduling 100 or 10,000 jobs, the base time remains fixed.
+- **Diagnosis:** Likely caused by `Condvar::wait_timeout` logic with a 1ms resolution or similar coarse sleep in the idle loop.
+- **Impact:** Caps low-latency throughput significantly (199 Kelem/s at small batches vs 1.98 Melem/s at larger).
+
+### 2. Scaling Bottleneck
+The system is **scaling-limited**. Moving from 1 thread (71.6ms) to 32 threads (71.8ms) yields zero speedup for spawning tasks.
+- **Diagnosis:** Classic Global Lock Contention. Despite localized logic, a shared resource (likely the Global Injector or a singular mutex) is serializing dispatch.
+- **Correction:** Must transition to true per-thread deques and potentially pin threads to avoid SMT thrashing.
+
+### 3. Execution vs. Management
+- **Management (Slow):** Allocation, Spawning, and Initial Dispatch are bottlenecked.
+- **Execution (Fast):** Computational jobs (NAS EP/MG) run extremely efficiently (up to 5.1 Gelem/s).
+- **Takeaway:** The engine is powerful, but the "transmission" (scheduler) needs tuning.
 
 ---
 

@@ -1,6 +1,6 @@
 # RustFiber Roadmap
 
-## v0.3: Micro-Optimizations & Kernel Integrations
+## Micro-Optimizations & Kernel Integrations
 
 ### Large Pages (HugeTLB) Support
 - **Goal**: Reduce TLB pressure for fiber stacks (512KB).
@@ -40,20 +40,25 @@
   - Implement `spawn_batch` API that pushes multiple jobs atomically.
   - Parallel job generation from multiple workers using work-stealing on the spawn loop itself.
   - Amortize Counter operations with batch decrement.
+  - Switch to true **Per-Thread Deques** for submission instead of global injector fallback.
+  - Pin worker threads to physical cores (Affinity) to avoid SMT thrashing involved in lock contention.
 - **Target**: Near-linear scaling for parallel spawn (56M+ jobs/sec on 32 threads).
 
 ### 3. Parking Timeout Reduction
 - **Observation**: `job_system_cold` shows ~500µs latency dominated by 1ms parking timeout.
+- **Root Cause**: coarse-grained sleep in the idle loop (1ms resolution).
 - **Trade-off**: Lower timeout = faster wake, higher timeout = less CPU spinning.
 - **Plan**:
+  - Replace coarse sleeps with `std::binary_semaphore` or Futex-based parking.
   - Adaptive timeout based on recent activity.
   - Immediate wake path for high-priority jobs (bypass parking entirely).
-- **Target**: <100µs cold path latency.
+- **Target**: <10µs cold path latency.
 
 ### 4. Work-Stealing Efficiency
-- **Observation**: Imbalanced workload throughput is ~8M elem/s, lower than balanced.
+- **Observation**:Imbalanced workload throughput (~8 Melem/s) is 50x slower than balanced (~393 Melem/s).
+- **Root Cause**: "Thieves" are too aggressive, locking victims or destroying cache locality by querying empty deques.
 - **Plan**:
-  - Implement work-stealing randomization to avoid convoy effects.
+  - Implement work-stealing randomization to avoid convoy effects or **Exponential Back-off** for stealing attempts.
   - Consider victim selection based on queue depth hints.
 - **Target**: >10M elem/s for imbalanced workloads.
 
