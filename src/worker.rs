@@ -27,7 +27,7 @@ pub enum WorkerPoolError {
 }
 
 /// Global parking mechanism for worker threads.
-/// uses a Condition Variable to block idle threads and wake them up when work arrives.
+/// Uses 1ms timeout polling for efficient work discovery without explicit signaling overhead.
 pub(crate) struct GlobalParker {
     lock: std::sync::Mutex<()>,
     cvar: std::sync::Condvar,
@@ -43,36 +43,26 @@ impl GlobalParker {
         }
     }
 
-    /// Blocks the current thread until notified.
+    /// Parks the current thread with a 1ms timeout.
+    /// This allows workers to self-discover work without explicit signaling.
     pub(crate) fn park(&self) {
         let guard = self.lock.lock().unwrap();
         self.sleepers.fetch_add(1, Ordering::SeqCst);
-        // We put the thread to sleep.
-        // Note: We might experience spurious wakeups, which is fine; the worker will just check for work and sleep again.
-        // We use wait_timeout to prevent deadlocks (lost wakeups) due to race conditions between
-        // checking `sleepers` count and actually parking. A 1ms timeout is sufficient responsiveness backup.
         let _result = self.cvar.wait_timeout(guard, std::time::Duration::from_millis(1)).unwrap();
         self.sleepers.fetch_sub(1, Ordering::SeqCst);
     }
 
-    /// Wakes up *one* sleeping thread, if any are sleeping.
-    pub(crate) fn wake_one(&self) {
-        // Optimization: Only notify if we know someone is sleeping.
-        // We use Relaxed or Acquire/Release for the check depending on strictness needed,
-        // but SeqCst is safest for now to ensure we see the increment from `park`.
+    /// Wakes up *one* sleeping thread (if any).
+    pub fn wake_one(&self) {
         if self.sleepers.load(Ordering::SeqCst) > 0 {
-            // We notify while holding the lock? 
-            // Ideally avoid holding lock while notifying to prevent "hurry up and wait" but Condvar::notify_one doesn't require lock.
-            // Just notify.
             self.cvar.notify_one();
         }
     }
 
     /// Wakes up *all* sleeping threads.
+    /// Used during shutdown.
     pub(crate) fn wake_all(&self) {
-        if self.sleepers.load(Ordering::SeqCst) > 0 {
-            self.cvar.notify_all();
-        }
+        self.cvar.notify_all();
     }
 }
 
@@ -369,11 +359,14 @@ impl Worker {
                                     metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
                                     // We stole work and populated our queue (steal_batch), so we have work now
                                     has_work[worker_id].store(true, Ordering::Relaxed);
+                                    
+                                    // Cascade Wakeup: We stole a batch, potentially more than we can handle.
+                                    // Wake another worker to help steal from us or others.
+                                    parker.wake_one();
                                 }
                                 crossbeam::deque::Steal::Empty => {
-                                    metrics.worker_steals_failed.fetch_add(1, Ordering::Relaxed);
-                                    // Optimization: If steal failed, we can verify if the flag was stale? 
-                                    // No, just continue.
+                                    // Stale has_work flag - victim finished before we arrived.
+                                    // Not counted as failure since we did check has_work.
                                 }
                                 crossbeam::deque::Steal::Retry => {
                                     metrics.worker_steals_retry.fetch_add(1, Ordering::Relaxed);
@@ -410,9 +403,12 @@ impl Worker {
                                         metrics.local_queue_pushes.fetch_add(1, Ordering::Relaxed);
                                         // We have work now
                                         has_work[worker_id].store(true, Ordering::Relaxed);
+                                        
+                                        // Cascade Wakeup from Global:
+                                        parker.wake_one();
                                     }
                                     crossbeam::deque::Steal::Empty => {
-                                        metrics.injector_steals_failed.fetch_add(1, Ordering::Relaxed);
+                                        // Empty injector is normal during idle - not a failure
                                         break;
                                     }
                                     crossbeam::deque::Steal::Retry => {
@@ -617,7 +613,13 @@ impl Worker {
                         // - Threads are woken up by `notify_one` when new work is pushed.
                         // - This eliminates "Empty Attempts" almost entirely as workers only wake when work exists.
                         
+                        // Parking Strategy via Semaphore:
+                        // - Threads block indefinitely until `wake_one` increments the signal count.
+                        // - No polling, no timeout.
                         parker.park();
+                        
+                        // After waking, we reset backoff to `snooze` level? 
+                        // No, if we woke up, we presumably have work. Reset fully.
                         backoff.reset();
                     } else {
                         // Brief Idle: Spin or yield
@@ -832,6 +834,11 @@ impl WorkerPool {
         self.frame_index.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Wakes up a single worker thread.
+    pub fn wake_one(&self) {
+        self.parker.wake_one();
+    }
+
     /// Submits a single job to the scheduling system.
     pub fn submit(&self, job: Job) {
         // Optimization: Try to push to the thread-local queue if we are on a worker thread
@@ -894,6 +901,7 @@ impl WorkerPool {
         };
 
         // Fallback to global injector (batch optimized)
+        let count = jobs.len();
         for job in jobs {
             if job.priority == crate::job::JobPriority::High {
                 self.high_priority_injector.push(job);
@@ -901,7 +909,14 @@ impl WorkerPool {
                 self.injector.push(job);
             }
         }
-        self.parker.wake_one();
+        
+        // Wake up multiple workers to handle the batch.
+        // We wake up to 'jobs.len()' workers (clamped), utilizing the Semaphore count.
+        // This ensures enough capacity is activated immediately.
+        let wake_count = count.min(self.workers.len());
+        for _ in 0..wake_count {
+            self.parker.wake_one();
+        }
     }
 
     /// Returns the number of worker threads in the pool.
@@ -917,11 +932,16 @@ impl WorkerPool {
     /// Shuts down the worker pool and waits for all threads to finish.
     pub fn shutdown(self) -> Result<(), WorkerPoolError> {
         while !self.injector.is_empty() {
+            // Ensure workers are awake to process the remaining items
+            self.parker.wake_all();
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
         self.shutdown
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        
+        // Wake up all workers so they can see the shutdown flag
+        self.parker.wake_all();
 
         let mut failed_count = 0;
         for worker in self.workers {

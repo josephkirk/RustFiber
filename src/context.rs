@@ -93,6 +93,8 @@ impl<'a> Context<'a> {
             unsafe {
                 (*queue.0).push(job);
             }
+            // Note: We do NOT wake here. Workers will self-discover via 1ms polling.
+            // Aggressive waking causes mutex contention that harms performance.
         } else {
             // Fallback to global injector (Lock contention)
             self.job_system.submit_to_injector(job);
