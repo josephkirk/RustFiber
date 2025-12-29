@@ -138,6 +138,52 @@ Measures JobSystem initialization time.
 
 ---
 
+## Latest Results (32-thread AMD Ryzen)
+
+*Collected 2025-12-29*
+
+### Core Performance
+
+| Benchmark | Result | Notes |
+|-----------|--------|-------|
+| `raw_fiber_switch` | **17.99 ns** | ✅ Meets <50ns target |
+| `raw_fiber_with_work` | **19.60 ns** | Minimal overhead |
+| `job_system_cold` | **501.65 µs** | Dominated by 1ms parking timeout |
+
+### Throughput
+
+| Benchmark | Throughput | Notes |
+|-----------|------------|-------|
+| `spawn_1m_jobs` (32 threads) | **13.68 M jobs/sec** | ✅ Exceeds 10M target |
+| `spawn_1m` (1 thread) | **13.95 M jobs/sec** | Sequential spawn bottleneck |
+| `spawn_1m` (8 threads) | **14.20 M jobs/sec** | Best scaling point |
+
+### Scientific Computing
+
+| Benchmark | Throughput | Notes |
+|-----------|------------|-------|
+| `ep/tasks/1M` | **393 Melem/s** | Embarrassingly parallel |
+| `mg/grid/256` | **5.12 Gelem/s** | Memory bandwidth limited |
+| `cg/size/100K` | **95.4 Melem/s** | Irregular access pattern |
+
+### Application Patterns
+
+| Benchmark | Throughput/Time |
+|-----------|-----------------|
+| `producer_consumer/500K` | **122 Melem/s** |
+| `allocation/1M` | **77.3 Melem/s** |
+| `transform/d8_b2` | **978 µs** |
+
+### Startup Time
+
+| Config | Time | Notes |
+|--------|------|-------|
+| `minimal_4` | **30.77 ms** | ⚠️ Higher than expected |
+| `default_16` | **30.88 ms** | Worker thread creation overhead |
+| `large_64` | **31.71 ms** | Fiber pool size has minimal impact |
+
+---
+
 ## Interpreting Results
 
 ### Latency Benchmarks
