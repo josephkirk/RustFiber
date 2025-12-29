@@ -131,9 +131,10 @@ fn test_topology_local_allocation_end_to_end() {
         // The optimization target was `Job::new` which is generic.
         // So we just run a nested logic.
 
-        let _ = ctx.spawn_job(move |_| {
+        let cnt = ctx.spawn_job(move |_| {
             done_clone.store(true, Ordering::SeqCst);
         });
+        ctx.wait_for(&cnt);
     });
 
     system2.wait_for_counter(&root);

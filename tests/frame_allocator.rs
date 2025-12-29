@@ -11,9 +11,10 @@ fn test_frame_allocation_lifecycle() {
     // Run a root job (heap)
     let jobs_done = system.run_with_context(move |ctx| {
         // Spawn nested job (frame allocated by default in nested context)
-        let _ = ctx.spawn_job(move |_| {
+        let child_counter = ctx.spawn_job(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
         });
+        ctx.wait_for(&child_counter);
     });
 
     system.wait_for_counter(&jobs_done);
@@ -27,12 +28,16 @@ fn test_frame_allocation_lifecycle() {
     // Run again to ensure allocator reset worked and didn't crash
     let c2 = counter_val.clone();
     let jobs_done2 = system.run_with_context(move |ctx| {
+        let mut counters = Vec::with_capacity(10);
         // Spawn multiple nested jobs to fill allocator slightly
         for _ in 0..10 {
             let c3 = c2.clone();
-            ctx.spawn_job(move |_| {
+            counters.push(ctx.spawn_job(move |_| {
                 c3.fetch_add(1, Ordering::SeqCst);
-            });
+            }));
+        }
+        for c in counters {
+            ctx.wait_for(&c);
         }
     });
 
