@@ -136,7 +136,14 @@ def get_metric_config(benchmark_name, result_data_points):
     elif "Throughput" in benchmark_name:
         config['ylabel'] = 'Throughput (Tasks/sec)'
         config['log_y'] = True
+        config['log_x'] = True
         config['transform_y'] = lambda ms, n: (n / (ms / 1000.0)) if ms > 0 else 0
+    elif "Empty Job Latency" in benchmark_name:
+        config['ylabel'] = 'Latency per 1,000 Tasks (ms)'
+        config['log_y'] = False
+        # ms is avg time per task. Transform to time for 1000 tasks.
+        # (ms * 1000) gives ms per 1000 tasks.
+        config['transform_y'] = lambda ms, n: ms * 1000
     elif any(x in benchmark_name for x in ["Latency", "Allocation", "Fibonacci", "QuickSort"]):
         config['ylabel'] = 'Latency per Task (μs)'
         config['log_y'] = False 
@@ -270,21 +277,40 @@ def plot_graph(title, results_list, output_filename, mode="single"):
             val = config['transform_y'](dp['time_ms'], dp['num_tasks'])
             y_metric.append(val)
         
-        # IMPROVEMENT: Normalize speedup to 1.0x at 1 thread
         if config.get('is_speedup', False) and len(y_metric) > 0 and y_metric[0] > 0:
             base = y_metric[0]
-            y_metric = [y / base for y in y_metric]
+            # Normalize speedup
+            y_speedup = [y / base for y in y_metric]
 
-        ax.plot(x_threads, y_metric, marker='o', linewidth=LINE_WIDTH, markersize=MARKER_SIZE, color=COLORS[0], label="Measured Scaling")
-        
-        # Add Ideal Scaling Line (Starting at 1,1)
-        if config.get('is_speedup', False):
-            ideal_y = [xc for xc in x_threads]
-            ax.plot(x_threads, ideal_y, linestyle='--', color='gray', alpha=0.7, label='Ideal Scaling')
-            ax.set_ylim(bottom=0)
-            ax.legend(frameon=True, framealpha=1.0)
+            # Compute Efficiency: Speedup / Threads
+            y_efficiency = [s / t for s, t in zip(y_speedup, x_threads)]
             
-        ax.set_title(title, pad=20)
+            # --- Primary Axis: Speedup ---
+            l1, = ax.plot(x_threads, y_speedup, marker='o', linewidth=LINE_WIDTH, markersize=MARKER_SIZE, color=COLORS[0], label="Measured Speedup")
+            
+            # Add Ideal Scaling Line
+            ideal_y = [xc for xc in x_threads]
+            l2, = ax.plot(x_threads, ideal_y, linestyle='--', color='gray', alpha=0.7, label='Ideal Scaling')
+            
+            ax.set_ylim(bottom=0)
+            
+            # --- Secondary Axis: Efficiency ---
+            ax2 = ax.twinx()
+            ax2.set_ylabel('Efficiency (Speedup/Threads)')
+            ax2.set_ylim(0, 1.1)  # Efficiency is typically 0.0 - 1.0 (can be >1 for superlinear)
+            
+            l3, = ax2.plot(x_threads, y_efficiency, marker='s', linestyle=':', linewidth=2, markersize=6, color='#C44E52', label="Efficiency")
+            
+            # Combine legends
+            lines = [l1, l2, l3]
+            labels = [l.get_label() for l in lines]
+            ax.legend(lines, labels, frameon=True, framealpha=1.0, loc='upper left')
+            
+            ax.set_title(title, pad=20)
+        else:
+             # Standard plotting for non-speedup metrics in scaling mode
+             ax.plot(x_threads, y_metric, marker='o', linewidth=LINE_WIDTH, markersize=MARKER_SIZE, color=COLORS[0], label="Measured")
+             ax.set_title(title, pad=20)
 
     else:
         fig, ax = plt.subplots()
@@ -297,6 +323,12 @@ def plot_graph(title, results_list, output_filename, mode="single"):
             data = res['data_points']
             # Include 'time', 'scaling_factor', or 'latency' metrics
             data = [d for d in data if d.get('metric_type') in [None, 'time', 'scaling_factor', 'latency'] and d['time_ms'] > 0]
+            data = [d for d in data if d.get('metric_type') in [None, 'time', 'scaling_factor', 'latency'] and d['time_ms'] > 0]
+            
+            # Filter noise for Empty Job Latency (hide small batches < 1000)
+            if "Empty Job Latency" in title:
+                data = [d for d in data if d['num_tasks'] >= 1000]
+
             if not data: continue
 
             x = [d['num_tasks'] for d in data]
@@ -306,6 +338,54 @@ def plot_graph(title, results_list, output_filename, mode="single"):
             tc = res['system_info']['cpu_cores']
             label = f"{tc}T"
             ax.plot(x, y, marker=MARKERS[i % len(MARKERS)], label=label, color=COLORS[i % len(COLORS)], alpha=0.9)
+
+        if "Throughput" in title:
+            # --- DUAL AXIS MODE: Left=Throughput (Log), Right=Speedup (Log/Linear) ---
+            # 1. Identify Baseline (1T)
+            baseline_result = next((r for r in results_list if r['system_info']['cpu_cores'] == 1), None)
+            baseline_map = {} # num_tasks -> throughput
+
+            if baseline_result:
+                for dp in baseline_result['data_points']:
+                    throughput = config['transform_y'](dp['time_ms'], dp['num_tasks'])
+                    baseline_map[dp['num_tasks']] = throughput
+
+            # 2. Setup Secondary Axis
+            ax2 = ax.twinx()
+            ax2.set_ylabel('Scaling Factor (vs 1T)')
+            # Use log scale for speedup if it varies significantly? Or linear? 
+            # Linear is usually better for "3x, 4x" unless it's huge.
+            # But graph is log-log. Let's try Linear first for Speedup as requested "delta".
+            # ax2.set_yscale('log') 
+
+            # 3. Plot Speedup Lines (Dashed)
+            for i, res in enumerate(results_list):
+                if res['system_info']['cpu_cores'] == 1: continue # Don't plot speedup for 1T (it's 1.0)
+                
+                data = res['data_points']
+                # Filter valid data
+                data = [d for d in data if d.get('metric_type') in [None, 'time', 'scaling_factor', 'latency'] and d['time_ms'] > 0]
+                if not data: continue
+
+                x_speedup = []
+                y_speedup = []
+                
+                for d in data:
+                    num_tasks = d['num_tasks']
+                    throughput = config['transform_y'](d['time_ms'], num_tasks)
+                    
+                    if num_tasks in baseline_map and baseline_map[num_tasks] > 0:
+                        speedup = throughput / baseline_map[num_tasks]
+                        x_speedup.append(num_tasks)
+                        y_speedup.append(speedup)
+                
+                if x_speedup:
+                    tc = res['system_info']['cpu_cores']
+                    ax2.plot(x_speedup, y_speedup, linestyle='--', marker=MARKERS[i % len(MARKERS)], 
+                             label=f"{tc}T Speedup", color=COLORS[i % len(COLORS)], alpha=0.7)
+
+            # Add legend for ax2
+            # ax2.legend(loc='upper right', frameon=True) # Might clutter, let user see dashed lines matching colors
 
         if config['log_x']:
             ax.set_xscale('log')
@@ -317,7 +397,13 @@ def plot_graph(title, results_list, output_filename, mode="single"):
         ax.set_xlabel('Workload Size (Tasks/Items)')
         ax.set_ylabel(config['ylabel'])
         if all_y:
-            ax.legend(frameon=True, framealpha=1.0)
+            # Combine legends from both axes?
+            lines1, labels1 = ax.get_legend_handles_labels()
+            lines2, labels2 = [], []
+            if "Throughput" in title:
+                 lines2, labels2 = ax2.get_legend_handles_labels()
+            
+            ax.legend(lines1 + lines2, labels1 + labels2, frameon=True, framealpha=1.0, loc='upper left', ncol=2)
             
         ax.set_title(title, pad=20)
 

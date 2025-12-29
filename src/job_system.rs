@@ -79,6 +79,15 @@ pub enum GranularityHint {
     Heavy,
 }
 
+/// Partitioning strategy for parallel loops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Partitioner {
+    /// Automatically determine batch size based on worker count.
+    Auto,
+    /// Use a fixed batch size (chunk size).
+    Static(usize),
+}
+
 /// The main job system managing worker threads and job execution.
 ///
 /// This is the primary interface for the fiber-based job system.
@@ -791,6 +800,33 @@ impl JobSystem {
         let target_batches = num_workers * batches_per_worker;
         let batch_size = (len / target_batches).max(1);
 
+        self.parallel_for_chunked(range, batch_size, body)
+    }
+
+    /// Executes a parallel for-loop with a specific partitioner.
+    pub fn parallel_for_partitioned<F>(
+        &self,
+        range: std::ops::Range<usize>,
+        partitioner: Partitioner,
+        body: F,
+    ) -> Counter
+    where
+        F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
+    {
+        let batch_size = match partitioner {
+            Partitioner::Auto => {
+                let num_workers = self.worker_pool.size();
+                // Default to Light granularity (4 batches per worker)
+                let target_batches = num_workers * 4;
+                if target_batches > 0 {
+                    (range.len() / target_batches).max(1)
+                } else {
+                    range.len()
+                }
+            }
+            Partitioner::Static(size) => size.max(1),
+        };
+        
         self.parallel_for_chunked(range, batch_size, body)
     }
 

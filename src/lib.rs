@@ -211,7 +211,7 @@ pub enum PinningStrategy {
 pub use context::Context;
 pub use counter::Counter;
 pub use job::Job;
-pub use job_system::{JobSystem, JobSystemBuilder, JobSystemError};
+pub use job_system::{JobSystem, JobSystemBuilder, JobSystemError, Partitioner, GranularityHint};
 
 #[cfg(test)]
 mod tests;

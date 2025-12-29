@@ -3,7 +3,7 @@
 //! This module provides lightweight execution contexts (coroutines) for jobs,
 //! allowing them to yield execution without blocking the OS thread.
 
-use crate::allocator::linear::FrameAllocator;
+
 use crate::job::Job;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 
@@ -32,9 +32,10 @@ pub const NODE_STATE_WAITING: u32 = 1;
 pub const NODE_STATE_SIGNALED: u32 = 2;
 pub const NODE_STATE_SPINNING: u32 = 3;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AllocatorPtr(pub *mut FrameAllocator);
+#[repr(transparent)]
+pub struct AllocatorPtr(pub *mut crate::allocator::paged::PagedFrameAllocator);
 unsafe impl Send for AllocatorPtr {}
+unsafe impl Sync for AllocatorPtr {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueuePtr(pub *const crossbeam::deque::Worker<Job>);

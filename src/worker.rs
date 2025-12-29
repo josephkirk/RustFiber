@@ -5,14 +5,14 @@
 //! fibers (jobs) are multiplexed onto a fixed number of worker threads.
 
 use crate::PinningStrategy;
-use crate::allocator::linear::FrameAllocator;
+use crate::allocator::paged::PagedFrameAllocator;
 use crate::fiber::{AllocatorPtr, FiberInput, FiberState, QueuePtr};
 use crate::fiber_pool::FiberPool;
 use crate::job::Job;
 use core_affinity::CoreId;
 use crossbeam::deque::{Injector, Stealer, Worker as Deque};
 use crossbeam::utils::{Backoff, CachePadded};
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -45,7 +45,7 @@ impl GlobalParker {
 
     /// Blocks the current thread until notified.
     pub(crate) fn park(&self) {
-        let mut guard = self.lock.lock().unwrap();
+        let guard = self.lock.lock().unwrap();
         self.sleepers.fetch_add(1, Ordering::SeqCst);
         // We put the thread to sleep.
         // Note: We might experience spurious wakeups, which is fine; the worker will just check for work and sleep again.
@@ -78,7 +78,7 @@ impl GlobalParker {
 
 // Thread-Local Storage for the worker's FrameAllocator
 thread_local! {
-    static ACTIVE_ALLOCATOR: Cell<Option<*mut FrameAllocator>> = const { Cell::new(None) };
+    static ACTIVE_ALLOCATOR: Cell<Option<*mut PagedFrameAllocator>> = const { Cell::new(None) };
 }
 
 /// Helper to temporarily expose the allocator via TLS
@@ -90,7 +90,7 @@ impl ScopedAllocator {
     /// # Safety
     /// Caller must ensure the allocator outlives this struct and is not accessed uniquely
     /// while accessed via TLS.
-    unsafe fn new(ptr: *mut FrameAllocator) -> Self {
+    unsafe fn new(ptr: *mut PagedFrameAllocator) -> Self {
         ACTIVE_ALLOCATOR.with(|tls| tls.set(Some(ptr)));
         Self
     }
@@ -105,13 +105,13 @@ impl Drop for ScopedAllocator {
 /// Executes a closure wih the current thread's frame allocator, if available.
 pub fn with_current_allocator<F, R>(f: F) -> Option<R>
 where
-    F: FnOnce(&mut FrameAllocator) -> R,
+    F: FnOnce(&mut PagedFrameAllocator) -> R,
 {
     ACTIVE_ALLOCATOR.with(|tls| tls.get().map(|ptr| unsafe { f(&mut *ptr) }))
 }
 
 /// Returns a raw pointer to the current thread's frame allocator, if active.
-pub fn get_current_allocator() -> Option<*mut FrameAllocator> {
+pub fn get_current_allocator() -> Option<*mut PagedFrameAllocator> {
     ACTIVE_ALLOCATOR.with(|tls| tls.get())
 }
 
@@ -145,6 +145,29 @@ pub(crate) struct WorkerParams {
 
 thread_local! {
     pub static WORKER_ID: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// Thread-local raw pointer to the worker's local queue (Deque).
+    /// Accessed unsafely to bypass ownership rules for optimized submission.
+    static LOCAL_DEQUE: Cell<Option<*const Deque<Job>>> = const { Cell::new(None) };
+}
+
+/// Helper to expose the local deque via TLS
+struct ScopedDeque;
+
+impl ScopedDeque {
+    /// Registers the deque in TLS.
+    ///
+    /// # Safety
+    /// Caller must ensure the deque outlives this struct and is effectively owned by this thread.
+    unsafe fn new(ptr: *const Deque<Job>) -> Self {
+        LOCAL_DEQUE.with(|tls| tls.set(Some(ptr)));
+        Self
+    }
+}
+
+impl Drop for ScopedDeque {
+    fn drop(&mut self) {
+        LOCAL_DEQUE.with(|tls| tls.set(None));
+    }
 }
 
 impl Worker {
@@ -194,12 +217,20 @@ impl Worker {
 
         WORKER_ID.set(Some(worker_id));
 
+        WORKER_ID.set(Some(worker_id));
+
         // Initialize FrameAllocator on the thread (First-Touch)
-        let mut allocator = FrameAllocator::new(fiber_config.frame_stack_size);
+        let mut allocator = PagedFrameAllocator::new(fiber_config.frame_stack_size);
+
+        // SAFETY: Allocator lives as long as the function (and this scope).
 
         // SAFETY: Allocator lives as long as the function (and this scope).
         // Access via TLS is strictly local to this thread.
         let _scope = unsafe { ScopedAllocator::new(&mut allocator as *mut _) };
+
+        // Register local queue in TLS for optimized submission
+        // SAFETY: local_queue lives as long as this function.
+        let _deque_scope = unsafe { ScopedDeque::new(&local_queue as *const _) };
 
         // Initialize FiberPool on the thread (First-Touch)
         // Initialize FiberPool on the thread (First-Touch)
@@ -253,7 +284,7 @@ impl Worker {
         
         // Initialize RNG for randomized back-off
         // We use SmallRng for performance as we might call it frequently in the idle loop
-        let mut rng = rand::rngs::SmallRng::from_rng(&mut rand::rng());
+        let mut _rng = rand::rngs::SmallRng::from_rng(&mut rand::rng());
 
 
         // Track local frame index to detect changes
@@ -271,9 +302,11 @@ impl Worker {
                 // New frame detected, reset allocator
                 // SAFETY: We assume the user guarantees all jobs from the previous frame are done
                 // before incrementing the frame index.
-                unsafe {
+                // SAFETY: We assume the user guarantees all jobs from the previous frame are done
+                // before incrementing the frame index.
+                /*unsafe {*/
                     allocator.reset();
-                }
+                /*}*/
                 local_frame_index = global_frame_index;
             }
 
@@ -801,6 +834,30 @@ impl WorkerPool {
 
     /// Submits a single job to the scheduling system.
     pub fn submit(&self, job: Job) {
+        // Optimization: Try to push to the thread-local queue if we are on a worker thread
+        let job_or_consumed = LOCAL_DEQUE.with(|tls| {
+            if let Some(deque_ptr) = tls.get() {
+                // SAFETY: We are on the thread that owns this deque (ensured by TLS)
+                // and the deque is guaranteed to be alive by ScopedDeque guard in run_loop.
+                unsafe {
+                    (*deque_ptr).push(job);
+                }
+                None // Consumed
+            } else {
+                Some(job) // Not consumed, return it
+            }
+        });
+
+        let job = match job_or_consumed {
+            Some(j) => j,
+            None => {
+                // If we pushed locally, wake a sleeper
+                self.parker.wake_one();
+                return;
+            }
+        };
+
+        // Fallback to global injectors
         if job.priority == crate::job::JobPriority::High {
             self.high_priority_injector.push(job);
         } else {
@@ -812,10 +869,39 @@ impl WorkerPool {
     /// Submits multiple jobs in a batch to reduce contention.
     pub fn submit_batch(&self, jobs: Vec<Job>) {
         if jobs.is_empty() { return; }
-        // We could optimize this by splitting batch, but for now simple iteration is fine
+
+        let jobs_or_consumed = LOCAL_DEQUE.with(|tls| {
+             if let Some(deque_ptr) = tls.get() {
+                 // SAFETY: see submit()
+                 unsafe {
+                     let deque = &*deque_ptr;
+                     for job in jobs {
+                         deque.push(job);
+                     }
+                 }
+                 None
+             } else {
+                 Some(jobs)
+             }
+        });
+
+        let jobs = match jobs_or_consumed {
+            Some(j) => j,
+            None => {
+                self.parker.wake_one();
+                return;
+            }
+        };
+
+        // Fallback to global injector (batch optimized)
         for job in jobs {
-            self.submit(job); // `submit` calls wake_one, might be slightly inefficient (lock contention) but robust
+            if job.priority == crate::job::JobPriority::High {
+                self.high_priority_injector.push(job);
+            } else {
+                self.injector.push(job);
+            }
         }
+        self.parker.wake_one();
     }
 
     /// Returns the number of worker threads in the pool.

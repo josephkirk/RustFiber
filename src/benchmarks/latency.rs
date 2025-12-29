@@ -54,12 +54,19 @@ pub fn run_empty_job_latency_benchmark(
         let job_latencies_clone = Arc::clone(&job_latencies);
         let jobs_completed_clone = Arc::clone(&jobs_completed);
 
+        // Create a single counter for the entire batch to avoid 1M Arc allocations
+        // and ensure we actually wait for all jobs to complete.
+        let batch_counter = rustfiber::counter::Counter::new(num_tasks);
+        let batch_counter_clone = batch_counter.clone();
+
         let counter = job_system.run_with_context(move |ctx| {
             for _ in 0..num_tasks {
                 let job_latencies = Arc::clone(&job_latencies_clone);
                 let jobs_completed = Arc::clone(&jobs_completed_clone);
+                // Share the batch counter.
+                let job_cnt = batch_counter_clone.clone();
 
-                ctx.spawn_job(move |_| {
+                ctx.spawn_with_counter(move |_| {
                     // Record the latency: time from dispatch start to job execution start
                     let latency_ns = dispatch_start.elapsed().as_nanos() as u64;
 
@@ -68,11 +75,15 @@ pub fn run_empty_job_latency_benchmark(
 
                     // Empty job body
                     std::hint::black_box(());
-                });
+                }, job_cnt);
             }
         });
 
+        // Wait for the spawning job to finish
         job_system.wait_for_counter(&counter);
+        
+        // Now wait for all the children to finish
+        job_system.wait_for_counter(&batch_counter);
 
         // Calculate average scheduling latency
         let total_latency_ns = job_latencies.load(Ordering::Relaxed);
