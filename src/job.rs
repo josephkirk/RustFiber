@@ -3,7 +3,7 @@
 //! Jobs are units of work that can be executed by the fiber system.
 //! They encapsulate a closure and associated counter for tracking completion.
 
-use crate::allocator::linear::FrameAllocator;
+use crate::allocator::paged::PagedFrameAllocator;
 use crate::context::Context;
 use crate::counter::Counter;
 use crate::fiber::FiberHandle;
@@ -123,7 +123,7 @@ impl Job {
     }
 
     /// Creates a new job allocated in the provided frame allocator.
-    pub fn new_in_allocator<F>(work: F, allocator: &mut FrameAllocator) -> Self
+    pub fn new_in_allocator<F>(work: F, allocator: &mut PagedFrameAllocator) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
@@ -158,7 +158,7 @@ impl Job {
     pub fn with_counter_in_allocator<F>(
         work: F,
         counter: Option<Counter>,
-        allocator: &mut FrameAllocator,
+        allocator: &mut PagedFrameAllocator,
     ) -> Self
     where
         F: FnOnce() + Send + 'static,
@@ -242,7 +242,7 @@ impl Job {
     pub(crate) fn with_counter_and_context_in_allocator<F>(
         work: F,
         counter: Option<Counter>,
-        allocator: &mut FrameAllocator,
+        allocator: &mut PagedFrameAllocator,
         job_system_ptr: usize,
     ) -> Self
     where
@@ -290,7 +290,7 @@ impl Job {
     pub fn execute(
         self,
         scheduler: &dyn crate::counter::JobScheduler,
-        allocator: Option<*mut FrameAllocator>,
+        allocator: Option<*mut PagedFrameAllocator>,
         queue: Option<*const Worker<Job>>,
     ) {
         use crate::counter::CounterGuard;

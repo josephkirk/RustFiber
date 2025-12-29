@@ -1,6 +1,6 @@
 //! Context type for safe access to job system capabilities from within jobs.
 
-use crate::allocator::linear::FrameAllocator;
+use crate::allocator::paged::PagedFrameAllocator;
 use crate::counter::Counter;
 use crate::fiber::Fiber;
 use crate::job::{Job, SendPtr};
@@ -10,14 +10,14 @@ use crossbeam::deque::Worker;
 /// Context provided to jobs for accessing fiber system capabilities.
 pub struct Context<'a> {
     job_system: &'a JobSystem,
-    allocator: Option<SendPtr<FrameAllocator>>,
+    allocator: Option<SendPtr<PagedFrameAllocator>>,
     local_queue: Option<SendPtr<Worker<Job>>>,
 }
 
 impl<'a> Context<'a> {
     pub(crate) fn new(
         job_system: &'a JobSystem,
-        allocator: Option<*mut FrameAllocator>,
+        allocator: Option<*mut PagedFrameAllocator>,
         local_queue: Option<*const Worker<Job>>,
     ) -> Self {
         Context {

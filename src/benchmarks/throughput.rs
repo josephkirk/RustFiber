@@ -117,7 +117,7 @@ pub fn run_parallel_for_scaling_benchmark(
     // Serial run
     let serial_start = Instant::now();
     for _ in 0..array_size {
-        std::hint::black_box(fibonacci(25));
+            std::hint::black_box(fibonacci(5000));
     }
     let serial_time = serial_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -125,11 +125,15 @@ pub fn run_parallel_for_scaling_benchmark(
 
     // Parallel run
     let parallel_start = Instant::now();
-    let counter = job_system.parallel_for_chunked_auto(0..array_size, |range| {
-        for _ in range {
-            std::hint::black_box(fibonacci(25));
-        }
-    });
+    let counter = job_system.parallel_for_partitioned(
+        0..array_size,
+        rustfiber::Partitioner::Auto,
+        |range| {
+            for _ in range {
+                std::hint::black_box(fibonacci(5000));
+            }
+        },
+    );
     job_system.wait_for_counter(&counter);
     let parallel_time = parallel_start.elapsed().as_secs_f64() * 1000.0;
 
