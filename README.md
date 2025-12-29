@@ -151,35 +151,30 @@ cargo run --release
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation on the design, implementation, and usage.
 
-See [BENCHMARKS.md](BENCHMARKS.md) for information about running performance benchmarks.
+See [BENCHMARK.md](BENCHMARK.md) for information about running performance benchmarks.
 
 ### Benchmarks
 
-Run comprehensive performance benchmarks:
+Run criterion micro-benchmarks:
 
 ```bash
-# Using Python with uv (recommended)
-uv run run_benchmarks.py
+# Run all benchmarks
+cargo bench
 
-# Or with regular Python
-python3 run_benchmarks.py
+# Run specific benchmark
+cargo bench --bench fiber_switch    # Context switch latency (~18ns)
+cargo bench --bench throughput      # Job throughput (~14M jobs/sec)
+cargo bench --bench latency         # Scheduling latency
+cargo bench --bench work_stealing   # Work-stealing stress
+cargo bench --bench scientific      # NAS patterns (EP, MG, CG)
+cargo bench --bench transform       # Game engine hierarchy
+cargo bench --bench producer_consumer
+cargo bench --bench allocation
+cargo bench --bench startup
 ```
 
-This will test the system with:
-1. **Million Tiny Tasks (Fibonacci)** - Task creation and scheduling efficiency
-   ![Fibonacci Strategy Comparison](./docs/comparison_cores_benchmark_1_million_tiny_tasks_fibonacci.png)
-2. **Recursive Task Decomposition (QuickSort)** - Work-stealing efficiency
-   ![QuickSort Strategy Comparison](./docs/comparison_cores_benchmark_2_recursive_task_decomposition_quicksort.png)
-3. **Batching (Parallel For Auto)** - Throughput under contention
-   ![Batching Strategy Comparison](./docs/comparison_cores_batching_parallel_for_auto.png)
-4. **Producer-Consumer Stress Test** - Throughput under contention
-   ![Producer-Consumer Strategy Comparison](./docs/comparison_cores_benchmark_3_producer-consumer_lock-free.png)
-5. **NAS Parallel Benchmarks** - Real-world computational patterns (EP, MG, CG)
-   ![NAS EP Strategy Comparison](./docs/comparison_cores_benchmark_4a_nas_ep_embarrassingly_parallel.png)
-   ![NAS MG Strategy Comparison](./docs/comparison_cores_benchmark_4b_nas_mg_multi-grid.png)
-   ![NAS CG Strategy Comparison](./docs/comparison_cores_benchmark_4c_nas_cg_conjugate_gradient.png)
+HTML reports are generated in `target/criterion/report/index.html`.
 
-Benchmark results and graphs are saved to the `docs/` folder.
 
 ## Performance
 
