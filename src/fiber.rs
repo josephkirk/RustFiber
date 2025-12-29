@@ -56,8 +56,10 @@ pub enum FiberInput {
 pub enum YieldType {
     /// Reschedule the fiber immediately (cooperative yield).
     Normal,
-    /// suspend the fiber and wait for an external signal (intrusive wait).
+    /// Suspend the fiber and wait for an external signal (intrusive wait).
     Wait,
+    /// Job completed, fiber ready for reuse (Trampoline Pattern).
+    Complete,
 }
 
 /// The node embedded in every Fiber for intrusive lists.
@@ -131,13 +133,12 @@ thread_local! {
 
 impl Fiber {
     /// Creates a new fiber with the given stack size.
+    /// Uses a Trampoline Pattern: the coroutine loops forever, yielding Complete after each job.
     pub fn new(stack_size: usize, prefetch_pages: bool) -> Self {
         let mut stack = Box::new(
             DefaultStack::new(stack_size)
                 .unwrap_or_else(|_| DefaultStack::new(1024 * 1024).unwrap()),
         );
-
-        // NOTE: Prefaulting is now done lazily in resume() to avoid Windows stack probing issues
 
         // Extend lifetime of stack to 'static to satisfy Coroutine type.
         // SAFETY: We ensure `coroutine` is dropped before `stack`.
@@ -145,29 +146,54 @@ impl Fiber {
             std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(stack.as_mut())
         };
 
-        let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(
-                job,
-                scheduler_ptr,
-                fiber_ptr,
-                allocator_wrapper,
-                queue_wrapper,
-            ) = input
-            {
-                // Initialize yielder pointer in the Fiber struct.
-                // SAFETY: fiber_ptr is valid and pinned (Boxed in pool).
-                unsafe {
-                    (*fiber_ptr).yielder = yielder as *const _;
+        // Trampoline Pattern: Three-phase loop per the ECS fiber guide
+        // Phase A: Execution (with panic handling)
+        // Phase B: Synchronization (counter decrement via RAII guard)
+        // Phase C: Recycling (yield Complete, loop for next job)
+        let coroutine = Coroutine::with_stack(stack_ref, move |yielder, mut input: FiberInput| {
+            use std::panic::{catch_unwind, AssertUnwindSafe};
 
-                    // Execute the job using the provided scheduler
-                    // SAFETY: The scheduler reference is pinned/valid for the job execution.
-                    let scheduler = &*scheduler_ptr;
+            loop {
+                if let FiberInput::Start(
+                    job,
+                    scheduler_ptr,
+                    fiber_ptr,
+                    allocator_wrapper,
+                    queue_wrapper,
+                ) = input
+                {
+                    // === PHASE A: Execution with Panic Handling ===
+                    // Panics must not escape the fiber (UB across FFI/asm boundary)
+                    unsafe {
+                        (*fiber_ptr).yielder = yielder as *const _;
+                    }
+
+                    let scheduler = unsafe { &*scheduler_ptr };
                     let allocator = allocator_wrapper.map(|w| w.0);
                     let queue = queue_wrapper.map(|w| w.0);
-                    job.execute(scheduler, allocator, queue);
+
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        // Job::execute handles counter decrement via CounterGuard (Phase B)
+                        job.execute(scheduler, allocator, queue);
+                    }));
+
+                    if let Err(panic_payload) = result {
+                        // Log panic but do not propagate - fiber continues to recycle
+                        let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                            *s
+                        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                            s.as_str()
+                        } else {
+                            "Unknown panic"
+                        };
+                        eprintln!("[Fiber] Job panicked: {}", msg);
+                        // Note: CounterGuard already decremented in Job::execute
+                    }
                 }
-            } else {
-                // Logic error: effectively a no-op or panic
+
+                // === PHASE C: Recycling ===
+                // Yield Complete to return fiber to pool, await next job
+                input = yielder.suspend(YieldType::Complete);
             }
         });
 
@@ -212,7 +238,12 @@ impl Fiber {
 
             CURRENT_FIBER.set(None);
 
+            // Trampoline Pattern yield semantics:
+            // - Yield(Complete) = job completed, fiber ready for reuse → FiberState::Complete
+            // - Yield(Normal/Wait) = mid-job suspend → Yielded(...)
+            // - Return = should never happen (infinite loop) → Complete
             match result {
+                Ok(CoroutineResult::Yield(YieldType::Complete)) => FiberState::Complete,
                 Ok(CoroutineResult::Yield(y_type)) => FiberState::Yielded(y_type),
                 Ok(CoroutineResult::Return(_)) => FiberState::Complete,
                 Err(payload) => FiberState::Panic(payload),
@@ -223,7 +254,7 @@ impl Fiber {
     }
 
     /// Resets the fiber state for reuse.
-    /// Recreates the coroutine to reset the stack.
+    /// With Trampoline Pattern, the coroutine is reused - no recreation needed.
     pub fn reset(&mut self, _stack_size: usize, prefetch_pages: bool) {
         // Update prefetch_pages setting
         self.prefetch_pages = prefetch_pages;
@@ -231,38 +262,11 @@ impl Fiber {
         // Reset prefaulting flag for lazy prefaulting on next use
         self.stack_prefaulted = false;
 
-        // Drop existing coroutine to free stack usage
-        self.coroutine = None;
+        // Reset suspension state
+        self.is_suspended.store(false, std::sync::atomic::Ordering::Relaxed);
 
-        // Reuse existing stack
-        // Extend lifetime of stack to 'static to satisfy Coroutine type.
-        // SAFETY: We ensure `coroutine` is dropped before `stack`.
-        let stack_ref = unsafe {
-            std::mem::transmute::<&mut DefaultStack, &'static mut DefaultStack>(self.stack.as_mut())
-        };
-
-        let coroutine = Coroutine::with_stack(stack_ref, move |yielder, input: FiberInput| {
-            if let FiberInput::Start(
-                job,
-                scheduler_ptr,
-                fiber_ptr,
-                allocator_wrapper,
-                queue_wrapper,
-            ) = input
-            {
-                unsafe {
-                    (*fiber_ptr).yielder = yielder as *const _;
-                }
-
-                // SAFETY: scheduler_ptr is valid
-                let scheduler = unsafe { &*scheduler_ptr };
-                let allocator = allocator_wrapper.map(|w| w.0);
-                let queue = queue_wrapper.map(|w| w.0);
-                job.execute(scheduler, allocator, queue);
-            }
-        });
-
-        self.coroutine = Some(coroutine);
+        // NOTE: With Trampoline Pattern, coroutine stays alive and loops.
+        // No recreation needed - this is the key optimization!
     }
 
     /// Yields execution of the current fiber.

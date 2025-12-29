@@ -124,6 +124,21 @@ To optimize memory locality on multi-socket systems, we implemented infrastructu
 - **Configuration**: `FiberConfig` includes a `prefetch_pages` option to control this behavior.
 - **Current Status**: Framework implemented but disabled on Windows due to guard page violations that prevent safe memory writes to stack regions. The infrastructure remains ready for future Windows-compatible implementations.
 
+### 4.11 Trampoline Pattern (Fiber Lifecycle)
+To eliminate coroutine recreation overhead, fibers use a **Trampoline Pattern** with three execution phases:
+
+1. **Phase A: Execution** - Job runs inside `catch_unwind(AssertUnwindSafe(...))` to prevent panics from escaping the fiber (UB across FFI/asm boundary). Panics are logged but do not crash the system.
+2. **Phase B: Synchronization** - Counter decrement via `CounterGuard` RAII. When counter reaches zero, waiting fibers are atomically woken.
+3. **Phase C: Recycling** - Fiber yields `YieldType::Complete`, returning to the pool for reuse without coroutine recreation.
+
+- **Performance Impact**: Eliminates `Coroutine::with_stack()` call on every fiber reuse, reducing per-job overhead.
+- **Panic Safety**: Jobs that panic do not corrupt system state. Counter is still decremented, dependent jobs still wake.
+
+### 4.12 Load-Aware Work Stealing
+Workers maintain `has_work` atomic flags to enable efficient stealing:
+- **Skip Empty Victims**: Before attempting an expensive steal, workers check the victim's `has_work` flag to skip empty queues.
+- **1ms Timeout Polling**: Idle workers use `Condvar::wait_timeout(1ms)` for self-discovery of work, avoiding explicit signaling overhead.
+
 ---
 
 ## 5. Performance
