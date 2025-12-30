@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Embarrassingly Parallel (EP) - Pure throughput with zero communication
 fn bench_ep(c: &mut Criterion) {
-    let num_threads = num_cpus::get();
-    let system = JobSystem::new(num_threads);
+    // let num_threads = num_cpus::get();
+    let system = JobSystem::for_throughput();
 
     let mut group = c.benchmark_group("scientific/ep");
     group.sample_size(10);
@@ -40,8 +40,8 @@ fn bench_ep(c: &mut Criterion) {
 
 /// Multi-Grid (MG) - Tests communication and memory bandwidth
 fn bench_mg(c: &mut Criterion) {
-    let num_threads = num_cpus::get();
-    let system = JobSystem::new(num_threads);
+    // let num_threads = num_cpus::get();
+    let system = JobSystem::for_throughput();
 
     let mut group = c.benchmark_group("scientific/mg");
     group.sample_size(10);
@@ -74,8 +74,8 @@ fn bench_mg(c: &mut Criterion) {
 
 /// Conjugate Gradient (CG) - Tests irregular memory access
 fn bench_cg(c: &mut Criterion) {
-    let num_threads = num_cpus::get();
-    let system = JobSystem::new(num_threads);
+    // let num_threads = num_cpus::get();
+    let system = JobSystem::for_throughput();
 
     let mut group = c.benchmark_group("scientific/cg");
     group.sample_size(10);

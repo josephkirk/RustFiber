@@ -25,7 +25,7 @@ fn fibonacci(n: u64) -> u64 {
 
 fn bench_work_stealing_stress(c: &mut Criterion) {
     let num_threads = num_cpus::get();
-    let system = JobSystem::new(num_threads);
+    let system = JobSystem::for_throughput();
 
     // Warmup
     let warmup = system.parallel_for_chunked_auto(0..num_threads * 100, |_| {
