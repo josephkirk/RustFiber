@@ -13,7 +13,7 @@ const JOB_COUNT: usize = 1_000_000;
 /// Benchmark spawning 1M jobs with shared Counter.
 fn bench_spawn_1m_jobs(c: &mut Criterion) {
     let num_threads = num_cpus::get();
-    let system = JobSystem::new(num_threads);
+    let system = JobSystem::for_throughput();
 
     // Warmup
     for _ in 0..100 {
@@ -125,31 +125,39 @@ fn bench_strategies(c: &mut Criterion) {
             system.wait_for_counter(&counter);
         }
 
-        group.bench_function(BenchmarkId::new("spawn_1m", format!("{:?}", strategy)), |b| {
-            b.iter(|| {
-                let batch_counter = Counter::new(JOB_COUNT);
-                let counter_clone = batch_counter.clone();
+        group.bench_function(
+            BenchmarkId::new("spawn_1m", format!("{:?}", strategy)),
+            |b| {
+                b.iter(|| {
+                    let batch_counter = Counter::new(JOB_COUNT);
+                    let counter_clone = batch_counter.clone();
 
-                let root = system.run_with_context(move |ctx| {
-                    for _ in 0..JOB_COUNT {
-                        let cnt = counter_clone.clone();
-                        ctx.spawn_with_counter(
-                            |_| {
-                                std::hint::black_box(1 + 1);
-                            },
-                            cnt,
-                        );
-                    }
-                });
+                    let root = system.run_with_context(move |ctx| {
+                        for _ in 0..JOB_COUNT {
+                            let cnt = counter_clone.clone();
+                            ctx.spawn_with_counter(
+                                |_| {
+                                    std::hint::black_box(1 + 1);
+                                },
+                                cnt,
+                            );
+                        }
+                    });
 
-                system.wait_for_counter(&root);
-                system.wait_for_counter(&batch_counter);
-            })
-        });
+                    system.wait_for_counter(&root);
+                    system.wait_for_counter(&batch_counter);
+                })
+            },
+        );
     }
 
     group.finish();
 }
 
-criterion_group!(benches, bench_spawn_1m_jobs, bench_scaling, bench_strategies);
+criterion_group!(
+    benches,
+    bench_spawn_1m_jobs,
+    bench_scaling,
+    bench_strategies
+);
 criterion_main!(benches);

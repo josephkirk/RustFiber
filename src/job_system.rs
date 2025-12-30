@@ -374,6 +374,44 @@ impl JobSystem {
         }
     }
 
+    /// Creates a job system optimized for maximum throughput using OS scheduling.
+    ///
+    /// This configuration relies on the Operating System scheduler to place threads,
+    /// which generally achieves the highest utilization for general-purpose computing.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::for_throughput();
+    /// ```
+    pub fn for_throughput() -> Self {
+        let num_cpus = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+
+        let config = FiberConfig {
+            stack_size: 512 * 1024,
+            initial_pool_size: 32,
+            target_pool_size: 256,
+            frame_stack_size: 1024 * 1024,
+            prefetch_pages: false,
+        };
+
+        JobSystem {
+            worker_pool: WorkerPool::new_with_strategy(
+                num_cpus,
+                crate::PinningStrategy::None,
+                config,
+                #[cfg(feature = "metrics")]
+                None,
+            ),
+            #[cfg(feature = "metrics")]
+            metrics: None,
+        }
+    }
+
     /// Creates a job system optimized for data processing workloads.
     ///
     /// Uses balanced settings suitable for batch processing and analytics.
@@ -401,7 +439,7 @@ impl JobSystem {
         JobSystem {
             worker_pool: WorkerPool::new_with_strategy(
                 num_cpus,
-                crate::PinningStrategy::Linear,
+                crate::PinningStrategy::TieredSpillover,
                 config,
                 #[cfg(feature = "metrics")]
                 None,
@@ -438,7 +476,45 @@ impl JobSystem {
         JobSystem {
             worker_pool: WorkerPool::new_with_strategy(
                 num_cpus,
-                crate::PinningStrategy::CCDIsolation,
+                crate::PinningStrategy::AvoidSMT,
+                config,
+                #[cfg(feature = "metrics")]
+                None,
+            ),
+            #[cfg(feature = "metrics")]
+            metrics: None,
+        }
+    }
+
+    /// Creates a job system with strict thread-to-core mapping (Linear Pinning).
+    ///
+    /// This is useful for systems where you want total control over thread placement,
+    /// such as fully utilizing a specific subset of cores without OS interference.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustfiber::JobSystem;
+    ///
+    /// let job_system = JobSystem::for_strict_topology();
+    /// ```
+    pub fn for_strict_topology() -> Self {
+        let num_cpus = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        let config = FiberConfig {
+            stack_size: 512 * 1024,
+            initial_pool_size: 16,
+            target_pool_size: 128,
+            frame_stack_size: 1024 * 1024,
+            prefetch_pages: false,
+        };
+
+        JobSystem {
+            worker_pool: WorkerPool::new_with_strategy(
+                num_cpus,
+                crate::PinningStrategy::Linear,
                 config,
                 #[cfg(feature = "metrics")]
                 None,

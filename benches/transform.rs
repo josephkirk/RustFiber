@@ -18,7 +18,7 @@ struct Transform {
 
 fn bench_transform_hierarchy(c: &mut Criterion) {
     let num_threads = num_cpus::get();
-    let system = JobSystem::new(num_threads);
+    let system = JobSystem::for_gaming();
 
     // Warmup
     let warmup = system.parallel_for_chunked_auto(0..num_threads * 100, |_| {
