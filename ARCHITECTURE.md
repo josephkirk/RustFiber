@@ -152,11 +152,6 @@ Workers maintain `has_work` atomic flags to enable efficient distributed stealin
 
 Our benchmarks demonstrate the effectiveness of this architecture:
 
-- **Fibonacci (Tiny Tasks)**: >3.5 Million tasks/sec.
-- **Conjugate Gradient (Memory Bound)**: <1.5ms execution time for 100k elements (Linear Strategy).
-- **QuickSort (Recursive)**: Linear scaling with core count.
-- **Startup Latency**: Reduced from 4-5ms to <1ms through incremental fiber allocation.
-
 See [BENCHMARKS.md](BENCHMARKS.md) for detailed graphs and results.
 
 ## 6. Current Limitations
