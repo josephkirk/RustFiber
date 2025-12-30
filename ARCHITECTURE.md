@@ -58,7 +58,6 @@ Allocating new stacks for every fiber is prohibitive (`mmap` syscalls).
 - **Mechanism**: When a fiber completes, its stack is reset (rewind stack pointer) rather than deallocated. This reduced fiber allocation cost to near-zero.
 - **Machine Cost**: Pre-allocating fibers incurs a fixed startup latency (~4-5ms for 16 threads) and virtual memory reservation (~1GB). **UPDATE**: Optimized to <1ms startup through incremental pool growth.
 - **Benefit**: This "Warmup Cost" guarantees no allocation glitches during runtime execution, which is critical for consistent game frame times.
-- **Reference**: See [Startup Analysis](docs/startup_analysis.md) for details.
 
 ### 4.2 Intelligent Backoff & SMT Mitigation
 Efficiently handling idle states is crucial for both power and performance (especially on SMT/Hyperthreading).
