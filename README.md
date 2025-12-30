@@ -5,6 +5,7 @@
 
 A high-performance fiber-based job system implementation in Rust, following the architectural principles from Naughty Dog's engine parallelization work.
 
+> 🚀 **Hobby Project Alert!** This is a learning experiment where I'm geeking out on fibers and high-performance job systems. It's meant for fun and exploration, so use it at your own risk! If it explodes (metaphorically, of course), you've been warned. Enjoy the speed! 🏎️💨
 
 ## Features
 
