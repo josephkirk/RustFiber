@@ -37,27 +37,36 @@ pub struct ParallelIterMut<'a, T> {
 }
 
 // Trampolines for type erasure
-unsafe fn trampoline<T, F>(op_ptr: *const (), slice_ptr: *const (), i: usize)
+unsafe fn trampoline<T, F>(op_ptr: *const (), slice_ptr: *const (), range: std::ops::Range<usize>)
 where
     F: Fn(&T) + Sync + Send + Clone,
 {
     unsafe {
         let op = &*(op_ptr as *const F);
-        let slice_ptr = slice_ptr as *const T;
-        let item = &*slice_ptr.add(i);
-        op(item);
+        let slice_base = slice_ptr as *const T;
+        // Reconstruct slice for better vectorization
+        let sub_slice = std::slice::from_raw_parts(slice_base.add(range.start), range.len());
+        for item in sub_slice {
+            op(item);
+        }
     }
 }
 
-unsafe fn trampoline_mut<T, F>(op_ptr: *const (), slice_ptr: *const (), i: usize)
-where
+unsafe fn trampoline_mut<T, F>(
+    op_ptr: *const (),
+    slice_ptr: *const (),
+    range: std::ops::Range<usize>,
+) where
     F: Fn(&mut T) + Sync + Send + Clone,
 {
     unsafe {
         let op = &*(op_ptr as *const F);
-        let slice_ptr = slice_ptr as *mut T;
-        let item = &mut *slice_ptr.add(i);
-        op(item);
+        let slice_base = slice_ptr as *mut T;
+        // Reconstruct slice for better vectorization
+        let sub_slice = std::slice::from_raw_parts_mut(slice_base.add(range.start), range.len());
+        for item in sub_slice {
+            op(item);
+        }
     }
 }
 
@@ -99,7 +108,7 @@ mod tests {
 struct CallContext {
     op_addr: usize,
     slice_addr: usize,
-    trampoline: unsafe fn(*const (), *const (), usize),
+    trampoline: unsafe fn(*const (), *const (), std::ops::Range<usize>),
 }
 unsafe impl Send for CallContext {}
 unsafe impl Sync for CallContext {}
@@ -123,12 +132,13 @@ impl<'a, T: Sync + 'static> ParallelIter<'a, T> {
             trampoline: trampoline_fn,
         };
 
-        // parallel_for_auto requires 'static closure.
+        // parallel_for_chunked_auto requires 'static closure.
         // ctx is Copy/Send/Sync and 'static.
-        // The closure below is therefore 'static.
-        let counter = self.job_system.parallel_for_auto(0..len, move |i| unsafe {
-            (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), i);
-        });
+        let counter = self
+            .job_system
+            .parallel_for_chunked_auto(0..len, move |range| unsafe {
+                (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), range);
+            });
         self.job_system.wait_for_counter(&counter);
     }
 }
@@ -150,9 +160,11 @@ impl<'a, T: Send + 'static> ParallelIterMut<'a, T> {
             trampoline: trampoline_fn,
         };
 
-        let counter = self.job_system.parallel_for_auto(0..len, move |i| unsafe {
-            (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), i);
-        });
+        let counter = self
+            .job_system
+            .parallel_for_chunked_auto(0..len, move |range| unsafe {
+                (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), range);
+            });
         self.job_system.wait_for_counter(&counter);
     }
 }

@@ -331,5 +331,184 @@ fn bench_sand_simulation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_sand_simulation);
+// Heavy compute workload (simulating complex aerodynamics/thermodynamics)
+// "Best Case" for Rayon: Pure independent compute, minimal memory contention.
+#[inline(never)]
+fn heavy_physics_update(p: &mut Particle) {
+    if !p.active {
+        return;
+    }
+
+    // Perform some arbitrary heavy math
+    let mut v = p.vx + p.vy;
+    for _ in 0..200 {
+        v = v.sin() + v.cos();
+    }
+    // Write back to prevent optimization
+    p.vx += v * 0.000001;
+}
+
+fn run_heavy_physics_step(world: &mut World, backend: Backend, rng: &mut impl Rng) {
+    if world.active_count < world.capacity {
+        world.spawn(2000, rng);
+    }
+
+    let active_slice = &mut world.particles[0..world.active_count];
+
+    // Single Phase: Pure Parallel Update
+    match backend {
+        Backend::JobSystem(js) => {
+            // Use chunking for fair comparison with Rayon on heavy workloads?
+            // fiber_iter_mut uses chunking by default (ParallelSliceMut).
+            active_slice
+                .fiber_iter_mut(js)
+                .for_each(heavy_physics_update);
+        }
+        Backend::Rayon => {
+            active_slice.par_iter_mut().for_each(heavy_physics_update);
+        }
+        Backend::Serial => {
+            active_slice.iter_mut().for_each(heavy_physics_update);
+        }
+    }
+}
+
+fn bench_heavy_physics(c: &mut Criterion) {
+    let job_system = JobSystem::default();
+    let mut rng = rand::rng();
+
+    let mut group = c.benchmark_group("physics_compute_compare");
+    group.sample_size(10);
+
+    // We use fewer frames/particles because it's heavy
+    let items = 100_000;
+
+    group.bench_function("physics_100k_job_system", |b| {
+        b.iter_with_setup(
+            || World::new(items),
+            |mut world| {
+                for _ in 0..10 {
+                    // 10 frames of heavy compute
+                    run_heavy_physics_step(&mut world, Backend::JobSystem(&job_system), &mut rng);
+                }
+            },
+        );
+    });
+
+    group.bench_function("physics_100k_rayon", |b| {
+        b.iter_with_setup(
+            || World::new(items),
+            |mut world| {
+                for _ in 0..10 {
+                    run_heavy_physics_step(&mut world, Backend::Rayon, &mut rng);
+                }
+            },
+        );
+    });
+
+    group.bench_function("physics_100k_serial", |b| {
+        b.iter_with_setup(
+            || World::new(items),
+            |mut world| {
+                for _ in 0..10 {
+                    run_heavy_physics_step(&mut world, Backend::Serial, &mut rng);
+                }
+            },
+        );
+    });
+
+    group.finish();
+}
+
+fn bench_sand_1m(c: &mut Criterion) {
+    let job_system = JobSystem::default();
+    let mut rng = rand::rng();
+
+    let mut group = c.benchmark_group("sand_1m_compare");
+    group.sample_size(10);
+
+    let items = 1_000_000;
+
+    group.bench_function("sand_1m_job_system", |b| {
+        b.iter_with_setup(
+            || {
+                let mut w = World::new(items);
+                w.spawn(items, &mut rand::rng());
+                w
+            },
+            |mut world| {
+                for _ in 0..10 {
+                    run_simulation_step(&mut world, Backend::JobSystem(&job_system), &mut rng);
+                }
+            },
+        );
+    });
+
+    group.bench_function("sand_1m_rayon", |b| {
+        b.iter_with_setup(
+            || {
+                let mut w = World::new(items);
+                w.spawn(items, &mut rand::rng());
+                w
+            },
+            |mut world| {
+                for _ in 0..10 {
+                    run_simulation_step(&mut world, Backend::Rayon, &mut rng);
+                }
+            },
+        );
+    });
+
+    group.finish();
+}
+
+fn bench_physics_1m(c: &mut Criterion) {
+    let job_system = JobSystem::default();
+    let mut rng = rand::rng();
+
+    let mut group = c.benchmark_group("physics_1m_compare");
+    group.sample_size(10);
+
+    let items = 1_000_000;
+
+    group.bench_function("physics_1m_job_system", |b| {
+        b.iter_with_setup(
+            || {
+                let mut w = World::new(items);
+                w.spawn(items, &mut rand::rng());
+                w
+            },
+            |mut world| {
+                for _ in 0..10 {
+                    run_heavy_physics_step(&mut world, Backend::JobSystem(&job_system), &mut rng);
+                }
+            },
+        );
+    });
+
+    group.bench_function("physics_1m_rayon", |b| {
+        b.iter_with_setup(
+            || {
+                let mut w = World::new(items);
+                w.spawn(items, &mut rand::rng());
+                w
+            },
+            |mut world| {
+                for _ in 0..10 {
+                    run_heavy_physics_step(&mut world, Backend::Rayon, &mut rng);
+                }
+            },
+        );
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_sand_simulation,
+    bench_heavy_physics,
+    bench_sand_1m,
+    bench_physics_1m
+);
 criterion_main!(benches);
