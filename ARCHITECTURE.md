@@ -146,6 +146,15 @@ Efficiently handling idle states is key to low latency and CPU efficiency.
 Workers maintain `has_work` atomic flags to enable efficient distributed stealing:
 - **Skip Empty Victims**: Stealers check the victim's `has_work` flag before attempting an expensive deque CAS operation, significantly reducing bus contention on empty queues.
 
+### 4.14 Data Parallelism & Safe Type Erasure
+To provide a high-level API similar to `rayon`, we implemented `ParallelSlice` and `ParallelSliceMut` traits.
+- **Challenge**: The core `JobSystem::parallel_for_auto` requires `'static` closures because fibers can technically outlive the stack frame if not carefully managed. However, users want to capture local variables (like `&Quadtree` in N-Body).
+- **Solution**: We implemented a **Lifetime Erasure** layer using a "Trampoline" pattern in `iter.rs`.
+    1.  **Type Erasure**: The user's closure and slice are cast to raw pointers and passed inside a `CallContext` struct.
+    2.  **Trampoline**: A generic `unsafe fn` reconstructs the typed references from the raw pointers inside the worker thread.
+    3.  **Safety**: The public `for_each` API blocks the current thread (`wait_for_counter`) until all parallel jobs are complete. This guarantees that the stack frame (and captured references) outlives the parallel execution, making the technically unsafe pointer cast strictly safe in practice.
+    *   **Result**: Users get safe, ergonomic parallel iterators without `'static` lifetime bounds on their data.
+
 ---
 
 ## 5. Performance

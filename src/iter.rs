@@ -1,36 +1,5 @@
 use crate::JobSystem;
 
-
-// #[derive(Clone, Copy)]
-struct UnsafeSlice<T> {
-    slice: *mut [T],
-}
-
-unsafe impl<T> Send for UnsafeSlice<T> {}
-unsafe impl<T> Sync for UnsafeSlice<T> {}
-
-impl<T> UnsafeSlice<T> {
-    fn new(slice: &mut [T]) -> Self {
-        Self {
-            slice: slice as *mut [T],
-        }
-    }
-
-    /// Safety: Caller must ensure disjoint access from other threads.
-    unsafe fn get_mut<'a>(&self, index: usize) -> &'a mut T {
-        // Safety requirement implicitly met by unsafe fn
-        unsafe { &mut (*self.slice)[index] }
-    }
-}
-
-// Manual impl to avoid T: Clone/Copy bound
-impl<T> Copy for UnsafeSlice<T> {}
-impl<T> Clone for UnsafeSlice<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
 pub trait ParallelSlice<T> {
     fn par_iter<'a>(&'a self, job_system: &'a JobSystem) -> ParallelIter<'a, T>;
 }
@@ -62,47 +31,131 @@ pub struct ParallelIter<'a, T> {
     job_system: &'a JobSystem,
 }
 
-impl<'a, T: Sync + 'static> ParallelIter<'a, T> {
-    pub fn for_each<F>(self, op: F)
-    where
-        F: Fn(&T) + Sync + Send + Clone + 'static,
-    {
-        let len = self.slice.len();
-        // Avoid creating a mutable reference from a shared one directly as it is UB.
-        // We go via raw pointers.
-        let slice_ptr = self.slice.as_ptr() as *mut T;
-        let slice_len = self.slice.len();
-        // Reconstruct unsafe slice manually from raw parts
-        let unsafe_slice = UnsafeSlice {
-            slice: std::ptr::slice_from_raw_parts_mut(slice_ptr, slice_len),
-        };
-        
-        let counter = self.job_system.parallel_for_auto(0..len, move |i| {
-            // Safety: Disjoint access guaranteed by index i
-            let item = unsafe { &*(unsafe_slice.get_mut(i) as *const T) };
-            op(item);
-        });
-        self.job_system.wait_for_counter(&counter);
-    }
-}
-
 pub struct ParallelIterMut<'a, T> {
     slice: &'a mut [T],
     job_system: &'a JobSystem,
 }
 
+// Trampolines for type erasure
+unsafe fn trampoline<T, F>(op_ptr: *const (), slice_ptr: *const (), i: usize)
+where
+    F: Fn(&T) + Sync + Send + Clone,
+{
+    unsafe {
+        let op = &*(op_ptr as *const F);
+        let slice_ptr = slice_ptr as *const T;
+        let item = &*slice_ptr.add(i);
+        op(item);
+    }
+}
+
+unsafe fn trampoline_mut<T, F>(op_ptr: *const (), slice_ptr: *const (), i: usize)
+where
+    F: Fn(&mut T) + Sync + Send + Clone,
+{
+    unsafe {
+        let op = &*(op_ptr as *const F);
+        let slice_ptr = slice_ptr as *mut T;
+        let item = &mut *slice_ptr.add(i);
+        op(item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::JobSystem;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    #[test]
+    fn test_par_iter_mut_capture() {
+        let job_system = JobSystem::default();
+        let mut data = vec![1, 2, 3, 4, 5];
+        let factor = 10;
+        
+        data.par_iter_mut(&job_system).for_each(|x| {
+            *x *= factor;
+        });
+
+        assert_eq!(data, vec![10, 20, 30, 40, 50]);
+    }
+    
+    #[test]
+    fn test_par_iter_capture() {
+        let job_system = JobSystem::default();
+        let data = vec![1, 2, 3, 4, 5];
+        let sum = Arc::new(AtomicI32::new(0));
+        
+        data.par_iter(&job_system).for_each(|&x| {
+            sum.fetch_add(x, Ordering::Relaxed);
+        });
+
+        assert_eq!(sum.load(Ordering::Relaxed), 15);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CallContext {
+    op_addr: usize,
+    slice_addr: usize,
+    trampoline: unsafe fn(*const (), *const (), usize),
+}
+unsafe impl Send for CallContext {}
+unsafe impl Sync for CallContext {}
+
+impl<'a, T: Sync + 'static> ParallelIter<'a, T> {
+    pub fn for_each<F>(self, op: F)
+    where
+        F: Fn(&T) + Sync + Send + Clone,
+    {
+        let len = self.slice.len();
+        let slice_ptr = self.slice.as_ptr() as *const (); 
+        let op_ptr = &op as *const F as *const ();
+
+        // Force monomorphization and get function pointer
+        let trampoline_fn = trampoline::<T, F>;
+        
+        // Context contains only static data (pointers and fn pointer)
+        let ctx = CallContext {
+            op_addr: op_ptr as usize,
+            slice_addr: slice_ptr as usize,
+            trampoline: trampoline_fn,
+        };
+
+        // parallel_for_auto requires 'static closure.
+        // ctx is Copy/Send/Sync and 'static.
+        // The closure below is therefore 'static.
+        let counter = self.job_system.parallel_for_auto(0..len, move |i| {
+            unsafe {
+                (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), i);
+            }
+        });
+        self.job_system.wait_for_counter(&counter);
+    }
+}
+
 impl<'a, T: Send + 'static> ParallelIterMut<'a, T> {
     pub fn for_each<F>(self, op: F)
     where
-        F: Fn(&mut T) + Sync + Send + Clone + 'static,
+        F: Fn(&mut T) + Sync + Send + Clone,
     {
         let len = self.slice.len();
-        let unsafe_slice = UnsafeSlice::new(self.slice);
+        let slice_ptr = self.slice.as_mut_ptr() as *const ();
+        let op_ptr = &op as *const F as *const ();
+        
+        let trampoline_fn = trampoline_mut::<T, F>;
+        
+        let ctx = CallContext {
+            op_addr: op_ptr as usize,
+            slice_addr: slice_ptr as usize,
+            trampoline: trampoline_fn,
+        };
 
         let counter = self.job_system.parallel_for_auto(0..len, move |i| {
-            // Safety: parallel_for_auto guarantees distinct indices i
-            let item = unsafe { unsafe_slice.get_mut(i) };
-            op(item);
+            unsafe {
+                (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), i);
+            }
         });
         self.job_system.wait_for_counter(&counter);
     }
