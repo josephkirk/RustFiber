@@ -214,6 +214,7 @@ pub use iter::{ParallelSlice, ParallelSliceMut};
 pub use job::Job;
 pub use job_system::{GranularityHint, JobSystem, JobSystemBuilder, JobSystemError, Partitioner};
 
+pub mod c_api;
 pub mod iter;
 
 #[cfg(test)]
