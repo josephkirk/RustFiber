@@ -27,8 +27,8 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Frame Allocator**: Bump allocation for jobs, eliminating heap fragmentation and locking.
 - **Zero-Overhead Submission**: Lock-free Local Queue submission and detached jobs for maximum throughput.
 - **Cache Alignment**: Critical structures (`Counter`, `WaitNode`) and global states are explicitly aligned/padded to prevent false sharing on high-core CPUs.
-- **Job Batching**: `parallel_for_chunked` API for processing millions of items with optimal granularity and SIMD/cache locality.
-- **Startup Optimization**: Reduced initialization time from 4-5ms to <1ms through incremental fiber pool growth.
+- **Job Batching**: `parallel_for_chunked` API for processing millions of items with optimal granularity (up to 14M ops/sec).
+- **Startup Optimization**: Optimized initialization logic (approx 30ms startup time on 32-thread systems).
 - **NUMA Awareness Framework**: Infrastructure for NUMA-local memory placement (currently disabled on Windows due to compatibility constraints).
 
 ## Quick Start
@@ -198,10 +198,10 @@ HTML reports are generated in `target/criterion/report/index.html`.
 ## Performance
 
 Typical performance on modern multi-core systems:
-- 6+ million jobs/second throughput
-- Sub-microsecond latency for simple jobs
+- 14+ million jobs/second throughput (Peak at 8 threads)
+- Sub-microsecond latency for batch jobs
 - Efficient CPU utilization across all cores
-- **Startup Latency**: <1ms (optimized) due to incremental fiber pool allocation.
+- **Startup Latency**: ~30ms (limited by OS thread creation).
     - *Note*: This prevents runtime allocation glitches in game engines while maintaining fast startup.
     - CLI tools can reduce `initial_pool_size` for even faster startup.
 

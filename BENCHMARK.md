@@ -151,56 +151,26 @@ Measures JobSystem initialization time.
 | `job_system_cold` | **~16 µs** | ✅ **Fixed**: 500µs floor eliminated via signal-based parking. |
 | `scientific/ep` | **393 Melem/s** | Excellent execution efficiency. |
 
-### Throughput & Scaling
+### 1. Throughput & Scalability
+- **Peak Throughput**: ~22M jobs/sec with 4 threads.
+- **Scaling Cliff**: Performance regresses beyond 8 threads due to contention.
+    - 4 threads: ~22M jobs/s (Peak)
+    - 32 threads: ~2.8M jobs/s (Significant contention)
+- **Workload Impact**: 
+    - **Scientific (MG/CG)**: Linear scaling up to ~14G elements/s (MG Grid 128).
+    - **Startup**: ~30ms on 32-thread systems (OS thread creation overhead dominating).
 
-| Benchmark | Throughput | Notes |
-|-----------|------------|-------|
-| `spawn_1m_jobs` (all) | **~14 M/s** | ⚠️ **Scaling-Limited**: Zero net speedup from 1 to 32 threads. |
-| `scaling_peak` | **8 threads** | Performance regresses beyond 8 threads (Global Lock/Queue contention). |
-
-### Scientific Workload Strengths
-
-| Benchmark | Throughput | Notes |
-|-----------|------------|-------|
-| `ep/tasks/1M` | **393 Melem/s** | Excellent execution efficiency once scheduled. |
-| `mg/grid/256` | **5.12 Gelem/s** | Massive throughput for heavy math. |
-| `work_stealing` | **Low** | Imbalanced workloads fall to ~8M/s (50x slower than EP), indicating aggressive thief overhead. |
-
-### Application Patterns
-
-| Benchmark | Throughput/Time |
-|-----------|-----------------|
-| `producer_consumer/500K` | **122 Melem/s** |
-| `allocation/1M` | **77.3 Melem/s** |
-| `transform/d8_b2` | **978 µs** |
-
-### Startup Time
-
-| Config | Time | Notes |
-|--------|------|-------|
-| `minimal_4` | **30.77 ms** | ⚠️ Higher than expected |
-| `default_16` | **30.88 ms** | Worker thread creation overhead |
-| `large_64` | **31.71 ms** | Fiber pool size has minimal impact |
-
----
-
-## Detailed Analysis
-
-### 1. Latency & Responsiveness
-The "500µs Floor" has been successfully eliminated.
-- **Old Result**: Small workloads took ~501µs due to coarse `wait_timeout`.
-- **New Result**: **16µs** cold wakeup time.
-- **Impact**: Enables extremely fine-grained parallelism for audio, physics, and input handling without latency spikes.
-
-### 2. Scaling Bottleneck
-The system is **scaling-limited**. Moving from 1 thread (71.6ms) to 32 threads (71.8ms) yields zero speedup for spawning tasks.
-- **Diagnosis:** Classic Global Lock Contention. Despite localized logic, a shared resource (likely the Global Injector or a singular mutex) is serializing dispatch.
-- **Correction:** Must transition to true per-thread deques and potentially pin threads to avoid SMT thrashing.
+### 2. Latency & Overhead
+- **Fiber Switch**: ~18-19ns (raw). Excellent low-level performance.
+- **Job Submission**: 
+    - **Batched (100k)**: ~5.3M ops/s (Huge improvement +100%).
+    - **Single Item**: Regression detected at 1 thread (~12ms vs 11.5ms).
+- **Contention Benefits**: High thread counts (24-32) actually improve batched latency throughput (+48-82%), suggesting batching effectively mitigates lock contention.
 
 ### 3. Execution vs. Management
-- **Management (Slow):** Allocation, Spawning, and Initial Dispatch are bottlenecked.
-- **Execution (Fast):** Computational jobs (NAS EP/MG) run extremely efficiently (up to 5.1 Gelem/s).
-- **Takeaway:** The engine is powerful, but the "transmission" (scheduler) needs tuning.
+- **Management (Bottleneck)**: Spawning and singular dispatch are bottlenecked by global locks at high thread counts.
+- **Execution (Fast)**: Once scheduled, jobs run extremely fast (up to 14G elements/s).
+- **Takeaway**: Use batching APIs (`parallel_for_chunked`) for high-throughput scenarios to bypass scheduler overhead.
 
 ---
 
