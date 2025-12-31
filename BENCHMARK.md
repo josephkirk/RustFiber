@@ -138,6 +138,22 @@ Measures JobSystem initialization time.
 
 ---
 
+### `sand_simulation.rs` — Real-World Particle Simulation
+
+Simulates 100,000 falling sand particles with grid-based collision, gravity, and ground friction.
+
+- **Load**: Heavy, mixed compute and memory bandwidth.
+- **Pattern**: Double-buffered phases (Clear → Populate → Update).
+- **Comparison**: RustFiber vs Rayon vs Serial.
+
+| Benchmark | Description | Expected Result |
+|-----------|-------------|-----------------|
+| `sand_100k_job_system` | RustFiber `ParallelSlice::fiber_iter_mut` | **~47-50 ms** |
+| `sand_100k_rayon` | Rayon `par_iter` | **~68-70 ms** |
+| `sand_100k_serial` | Standard Iterator | **~154 ms** |
+
+---
+
 ## Latest Results (32-thread AMD Ryzen)
 
 *Collected 2025-12-29*
@@ -166,6 +182,14 @@ Measures JobSystem initialization time.
     - **Batched (100k)**: ~5.3M ops/s (Huge improvement +100%).
     - **Single Item**: Regression detected at 1 thread (~12ms vs 11.5ms).
 - **Contention Benefits**: High thread counts (24-32) actually improve batched latency throughput (+48-82%), suggesting batching effectively mitigates lock contention.
+
+### 4. Real-World Simulation (Sand Particles)
+- **Scenario**: 100,000 particles, 120 frames, Grid Collision.
+- **Performance**:
+    - **RustFiber**: ~48ms (Fastest)
+    - **Rayon**: ~69ms (1.4x slower)
+    - **Serial**: ~154ms (3.2x slower)
+- **Insight**: RustFiber outperforms Rayon by ~30% in this heavy, multi-phase workload, likely due to more efficient handling of fine-grained synchronization barriers.
 
 ### 3. Execution vs. Management
 - **Management (Bottleneck)**: Spawning and singular dispatch are bottlenecked by global locks at high thread counts.

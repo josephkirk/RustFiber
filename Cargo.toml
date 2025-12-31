@@ -32,6 +32,7 @@ path = "src/main.rs"
 [dev-dependencies]
 criterion = "0.8.1"
 criterion-plot = "0.8.1"
+rayon = "1.10"
 num_cpus = "1.16"
 
 [[bench]]

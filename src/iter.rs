@@ -1,15 +1,15 @@
 use crate::JobSystem;
 
 pub trait ParallelSlice<T> {
-    fn par_iter<'a>(&'a self, job_system: &'a JobSystem) -> ParallelIter<'a, T>;
+    fn fiber_iter<'a>(&'a self, job_system: &'a JobSystem) -> ParallelIter<'a, T>;
 }
 
 pub trait ParallelSliceMut<T> {
-    fn par_iter_mut<'a>(&'a mut self, job_system: &'a JobSystem) -> ParallelIterMut<'a, T>;
+    fn fiber_iter_mut<'a>(&'a mut self, job_system: &'a JobSystem) -> ParallelIterMut<'a, T>;
 }
 
 impl<T: Sync> ParallelSlice<T> for [T] {
-    fn par_iter<'a>(&'a self, job_system: &'a JobSystem) -> ParallelIter<'a, T> {
+    fn fiber_iter<'a>(&'a self, job_system: &'a JobSystem) -> ParallelIter<'a, T> {
         ParallelIter {
             slice: self,
             job_system,
@@ -18,7 +18,7 @@ impl<T: Sync> ParallelSlice<T> for [T] {
 }
 
 impl<T: Send> ParallelSliceMut<T> for [T] {
-    fn par_iter_mut<'a>(&'a mut self, job_system: &'a JobSystem) -> ParallelIterMut<'a, T> {
+    fn fiber_iter_mut<'a>(&'a mut self, job_system: &'a JobSystem) -> ParallelIterMut<'a, T> {
         ParallelIterMut {
             slice: self,
             job_system,
@@ -74,7 +74,7 @@ mod tests {
         let mut data = vec![1, 2, 3, 4, 5];
         let factor = 10;
 
-        data.par_iter_mut(&job_system).for_each(|x| {
+        data.fiber_iter_mut(&job_system).for_each(|x| {
             *x *= factor;
         });
 
@@ -87,7 +87,7 @@ mod tests {
         let data = vec![1, 2, 3, 4, 5];
         let sum = Arc::new(AtomicI32::new(0));
 
-        data.par_iter(&job_system).for_each(|&x| {
+        data.fiber_iter(&job_system).for_each(|&x| {
             sum.fetch_add(x, Ordering::Relaxed);
         });
 

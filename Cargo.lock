@@ -571,6 +571,7 @@ dependencies = [
  "lazy_static",
  "num_cpus",
  "rand",
+ "rayon",
  "serde",
  "serde_json",
  "sysinfo",

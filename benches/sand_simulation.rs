@@ -1,5 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::prelude::*;
+use rayon::prelude::*;
 use rustfiber::{JobSystem, ParallelSlice, ParallelSliceMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -44,9 +45,20 @@ impl CollisionGrid {
         }
     }
 
-    fn clear(&self, job_system: &JobSystem) {
-        // Parallel clear using the job system
-        self.cells.par_iter(job_system).for_each(|cell| {
+    fn clear_job_system(&self, job_system: &JobSystem) {
+        self.cells.fiber_iter(job_system).for_each(|cell| {
+            cell.store(false, Ordering::Relaxed);
+        });
+    }
+
+    fn clear_rayon(&self) {
+        self.cells.par_iter().for_each(|cell| {
+            cell.store(false, Ordering::Relaxed);
+        });
+    }
+
+    fn clear_serial(&self) {
+        self.cells.iter().for_each(|cell| {
             cell.store(false, Ordering::Relaxed);
         });
     }
@@ -132,141 +144,185 @@ impl World {
     }
 }
 
-fn run_simulation_step(world: &mut World, job_system: &JobSystem, rng: &mut impl Rng) {
-    if world.active_count < world.capacity {
-        world.spawn(2000, rng); // Faster spawn to fill up quickly
+// Logic for updating a single particle, extracted for reuse across backends
+#[inline(always)]
+fn update_particle(p: &mut Particle, grid: &CollisionGrid, dt: f32, gravity: f32, cell_size: f32) {
+    if !p.active {
+        return;
     }
 
-    // Phase 1: Clear the dynamic part of the grid (keep walls)
-    // For benchmark simplicity, we clear everything and re-add walls, or selective clear.
-    // Let's do a full clear + rebuild walls for consistent load.
-    world.grid.clear(job_system);
+    p.vy += gravity * dt;
 
-    // Re-add static walls (fast enough to do serial or parallel_for)
-    // Actually, let's just not clear the walls.
-    // Optimization: Only clear used cells? No, we need O(Grid) or O(N) clear.
-    // Atomic clear of 1M bools is fast.
+    // Proposed new position
+    let next_x = p.x + p.vx * dt;
+    let next_y = p.y + p.vy * dt;
 
-    // Phase 2: Populate Grid with PREVIOUS positions (Collision Map)
-    // This allows particles to "see" where others are currently.
+    // Check collision
+    let curr_idx = grid.get_index(p.x, p.y);
+    let next_idx = grid.get_index(next_x, next_y);
+    let _idx_below = grid.get_index(p.x, p.y - cell_size);
+
+    // Ground / Wall check via coordinates
+    if next_y <= 0.0 {
+        // Hit floor
+        p.y = 0.0;
+        p.vy = 0.0;
+        p.vx *= 0.5; // Friction
+    } else if let Some(n_idx) = next_idx {
+        // Self-check
+        let self_check = if let Some(c_idx) = curr_idx {
+            c_idx == n_idx
+        } else {
+            false
+        };
+
+        if !self_check && grid.cells[n_idx].load(Ordering::Relaxed) {
+            // Collision! Try sliding
+            let try_left = grid.get_index(p.x - cell_size, p.y - cell_size);
+            let try_right = grid.get_index(p.x + cell_size, p.y - cell_size);
+
+            let free_left =
+                try_left.is_some() && !grid.cells[try_left.unwrap()].load(Ordering::Relaxed);
+            let free_right =
+                try_right.is_some() && !grid.cells[try_right.unwrap()].load(Ordering::Relaxed);
+
+            // Deterministic randomish choice for sliding to avoid bias, but keep it simple
+            // We use a simple hash of position for determinism if we wanted, but here rand::random is hard
+            // inside parallel loop without passing rng. Let's just prefer left then right.
+            // Or use particle address/index? We don't have index here.
+            // Let's just alternate based on y coordinate parity to avoid strict bias 'falling left'
+            let prefer_left = (p.y as i32) % 2 == 0;
+
+            if free_left && (prefer_left || !free_right) {
+                // Slide left
+                p.x -= cell_size;
+                p.y -= cell_size;
+                p.vx *= 0.8;
+            } else if free_right {
+                // Slide right
+                p.x += cell_size;
+                p.y -= cell_size;
+                p.vx *= 0.8;
+            } else {
+                // Stuck
+                p.vx = 0.0;
+                p.vy = 0.0;
+            }
+        } else {
+            // Free to move
+            p.x = next_x;
+            p.y = next_y;
+        }
+    } else {
+        // Out of bounds cleanup
+        p.x = next_x.clamp(-400.0, 400.0);
+        p.y = next_y.max(0.0);
+    }
+}
+
+enum Backend<'a> {
+    JobSystem(&'a JobSystem),
+    Rayon,
+    Serial,
+}
+
+fn run_simulation_step(world: &mut World, backend: Backend, rng: &mut impl Rng) {
+    if world.active_count < world.capacity {
+        world.spawn(2000, rng);
+    }
+
+    // Phase 1: Clear Grid
+    match backend {
+        Backend::JobSystem(js) => world.grid.clear_job_system(js),
+        Backend::Rayon => world.grid.clear_rayon(),
+        Backend::Serial => world.grid.clear_serial(),
+    }
+
+    // Phase 2: Populate Collision Map
     let active_slice = &mut world.particles[0..world.active_count];
+    let grid_ref = &world.grid;
 
-    active_slice.par_iter_mut(job_system).for_each(|p| {
-        if !p.active {
-            return;
+    // Helper closure for population
+    let populate_op = |p: &mut Particle| {
+        if p.active {
+            if let Some(idx) = grid_ref.get_index(p.x, p.y) {
+                grid_ref.cells[idx].store(true, Ordering::Relaxed);
+            }
         }
-        // Simple bounding to keep in grid
-        if let Some(idx) = world.grid.get_index(p.x, p.y) {
-            world.grid.cells[idx].store(true, Ordering::Relaxed);
+    };
+
+    match backend {
+        Backend::JobSystem(js) => {
+            active_slice.fiber_iter_mut(js).for_each(populate_op);
         }
-    });
+        Backend::Rayon => {
+            active_slice.par_iter_mut().for_each(populate_op);
+        }
+        Backend::Serial => {
+            active_slice.iter_mut().for_each(populate_op);
+        }
+    }
 
-    // Re-enforce floor (in case a particle overwrote it? No, store(true) matches).
-    // But we cleared it. So we need to ensure floor is 'true'.
-    // Better: Populate walls *after* clearing.
-    // world.grid.create_walls(); // (Serial for now, effectively negligible compared to 100k particles)
-    // Let's do it inside the "Update" phase via boundary checks instead of wall cells.
-    // Or just treat y=0 as floor.
-
+    // Phase 3: Update Particles
     let dt = world.dt;
     let gravity = world.gravity;
     let cell_size = world.grid.cell_size;
 
-    // Phase 3: Update Particles
-    active_slice.par_iter_mut(job_system).for_each(|p| {
-        if !p.active {
-            return;
+    let update_op = |p: &mut Particle| {
+        update_particle(p, grid_ref, dt, gravity, cell_size);
+    };
+
+    match backend {
+        Backend::JobSystem(js) => {
+            active_slice.fiber_iter_mut(js).for_each(update_op);
         }
-
-        p.vy += gravity * dt;
-
-        // Proposed new position
-        let next_x = p.x + p.vx * dt;
-        let next_y = p.y + p.vy * dt;
-
-        // Check collision at next_x, next_y
-        // We check grid cell.
-        let curr_idx = world.grid.get_index(p.x, p.y);
-        let next_idx = world.grid.get_index(next_x, next_y);
-        let _idx_below = world.grid.get_index(p.x, p.y - cell_size); // Strictly below current
-
-        // Ground / Wall check via coordinates
-        if next_y <= 0.0 {
-            // Hit floor
-            p.y = 0.0;
-            p.vy = 0.0;
-            p.vx *= 0.5; // Friction
-        } else if let Some(n_idx) = next_idx {
-            // Check if target cell is occupied
-            // Note: We populated grid with CURRENT positions.
-            // So if we move into a cell that currently holds a particle, we collide.
-            // This prevents moving *through* people.
-
-            // Self-check: if next_idx == curr_idx, we are just staying in same cell (or moving sub-pixel). Safe.
-            let self_check = if let Some(c_idx) = curr_idx {
-                c_idx == n_idx
-            } else {
-                false
-            };
-
-            if !self_check && world.grid.cells[n_idx].load(Ordering::Relaxed) {
-                // Collision!
-                // Try sliding (Sand behavior)
-                // Check Down-Left and Down-Right relative to *Current* position (stacking logic)
-
-                let try_left = world.grid.get_index(p.x - cell_size, p.y - cell_size);
-                let try_right = world.grid.get_index(p.x + cell_size, p.y - cell_size);
-
-                let free_left = try_left.is_some()
-                    && !world.grid.cells[try_left.unwrap()].load(Ordering::Relaxed);
-                let free_right = try_right.is_some()
-                    && !world.grid.cells[try_right.unwrap()].load(Ordering::Relaxed);
-
-                if free_left && (!free_right || rand::random::<bool>()) {
-                    // Slide left
-                    p.x -= cell_size;
-                    p.y -= cell_size;
-                    p.vx *= 0.8;
-                } else if free_right {
-                    // Slide right
-                    p.x += cell_size;
-                    p.y -= cell_size;
-                    p.vx *= 0.8;
-                } else {
-                    // Stuck / Stacked
-                    p.vx = 0.0;
-                    p.vy = 0.0;
-                    // Keep old position (don't apply next_x/y)
-                }
-            } else {
-                // Free to move
-                p.x = next_x;
-                p.y = next_y;
-            }
-        } else {
-            // Out of bounds?
-            p.x = next_x.clamp(-400.0, 400.0);
-            p.y = next_y.max(0.0);
+        Backend::Rayon => {
+            active_slice.par_iter_mut().for_each(update_op);
         }
-    });
+        Backend::Serial => {
+            active_slice.iter_mut().for_each(update_op);
+        }
+    }
 }
 
 fn bench_sand_simulation(c: &mut Criterion) {
-    let job_system = JobSystem::default(); // Uses num_cpus
+    let job_system = JobSystem::default();
     let mut rng = rand::rng();
 
-    let mut group = c.benchmark_group("simulation");
-    group.sample_size(10); // Simulation is heavy, take fewer samples
+    let mut group = c.benchmark_group("simulation_backend_compare");
+    group.sample_size(10); 
 
-    group.bench_function("sand_100k_progressive", |b| {
+    // 1. RustFiber JobSystem
+    group.bench_function("sand_100k_job_system", |b| {
         b.iter_with_setup(
             || World::new(100_000),
             |mut world| {
-                // Simulate 120 frames.
-                // 0 -> 100k particles takes 100 frames (1000 per frame).
-                // We run 120 frames to include some full-load frames.
                 for _ in 0..120 {
-                    run_simulation_step(&mut world, &job_system, &mut rng);
+                    run_simulation_step(&mut world, Backend::JobSystem(&job_system), &mut rng);
+                }
+            },
+        );
+    });
+
+    // 2. Rayon
+    group.bench_function("sand_100k_rayon", |b| {
+        b.iter_with_setup(
+            || World::new(100_000),
+            |mut world| {
+                for _ in 0..120 {
+                    run_simulation_step(&mut world, Backend::Rayon, &mut rng);
+                }
+            },
+        );
+    });
+
+    // 3. Serial (Standard Iterator)
+    group.bench_function("sand_100k_serial", |b| {
+        b.iter_with_setup(
+            || World::new(100_000),
+            |mut world| {
+                for _ in 0..120 {
+                    run_simulation_step(&mut world, Backend::Serial, &mut rng);
                 }
             },
         );

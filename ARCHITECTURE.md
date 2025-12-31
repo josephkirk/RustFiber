@@ -147,7 +147,7 @@ Workers maintain `has_work` atomic flags to enable efficient distributed stealin
 - **Skip Empty Victims**: Stealers check the victim's `has_work` flag before attempting an expensive deque CAS operation, significantly reducing bus contention on empty queues.
 
 ### 4.14 Data Parallelism & Safe Type Erasure
-To provide a high-level API similar to `rayon`, we implemented `ParallelSlice` and `ParallelSliceMut` traits.
+To provide a high-level API similar to `rayon`, we implemented `ParallelSlice` and `ParallelSliceMut` traits with `fiber_iter` / `fiber_iter_mut`.
 - **Challenge**: The core `JobSystem::parallel_for_auto` requires `'static` closures because fibers can technically outlive the stack frame if not carefully managed. However, users want to capture local variables (like `&Quadtree` in N-Body).
 - **Solution**: We implemented a **Lifetime Erasure** layer using a "Trampoline" pattern in `iter.rs`.
     1.  **Type Erasure**: The user's closure and slice are cast to raw pointers and passed inside a `CallContext` struct.
