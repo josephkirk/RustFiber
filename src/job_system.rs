@@ -847,12 +847,12 @@ impl JobSystem {
 
     /// Executes a parallel for-loop (chunked) with automatically calculated batch size.
     ///
-    /// Uses `GranularityHint::Light` (4 batches per worker).
+    /// Uses `GranularityHint::Moderate` (8 batches per worker) to balance load better for large workloads.
     pub fn parallel_for_chunked_auto<F>(&self, range: std::ops::Range<usize>, body: F) -> Counter
     where
         F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
     {
-        self.parallel_for_chunked_with_hint(range, GranularityHint::Light, body)
+        self.parallel_for_chunked_with_hint(range, GranularityHint::Moderate, body)
     }
 
     /// Executes a parallel for-loop (chunked) with batch size tuned by a granularity hint.

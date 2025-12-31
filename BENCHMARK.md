@@ -194,14 +194,14 @@ Simulates 100,000 falling sand particles with grid-based collision, gravity, and
 ### 5. Scale Testing (1 Million Particles)
 - **Scenario**: 1,000,000 particles, 10 frames each.
 - **Sand Simulation (Memory/Sync Bound)**:
-    - **RustFiber**: ~27.8 ms (Fastest, -7% time)
-    - **Rayon**: ~29.9 ms
+    - **RustFiber**: ~28.3 ms (Fastest, -7% time)
+    - **Rayon**: ~30.5 ms
     - **Serial**: (Skipped)
     - **Insight**: RustFiber maintains efficiency advantage in complex, synchronized workloads even at massive scale.
 - **Heavy Physics (Pure Compute Bound)**:
-    - **RustFiber**: ~1.12 s
-    - **Rayon**: ~0.99 s (Fastest, -13% time)
-    - **Insight**: Rayon's adaptive task splitting and compiler optimizations (monomorphization) give it a slight edge in pure, uniform computation at scale. RustFiber remains highly competitive (~13% gap) despite the dynamic function pointer overhead.
+    - **RustFiber**: ~1.04 s
+    - **Rayon**: ~0.99 s (Fastest, -5% time)
+    - **Insight**: With optimized granularity (8 batches/worker), RustFiber is nearly tied with Rayon (~5% diff) in pure compute, proving the overhead of function pointers is minimal when properly batched.
 
 ### 3. Execution vs. Management
 - **Management (Bottleneck)**: Spawning and singular dispatch are bottlenecked by global locks at high thread counts.
