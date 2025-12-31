@@ -134,12 +134,10 @@ impl<'a, T: Sync + 'static> ParallelIter<'a, T> {
 
         // parallel_for_chunked_auto requires 'static closure.
         // ctx is Copy/Send/Sync and 'static.
-        let counter = self
-            .job_system
-            .parallel_for_chunked_auto(0..len, move |range| unsafe {
+        self.job_system
+            .execute_parallel_for_auto(0..len, move |range| unsafe {
                 (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), range);
             });
-        self.job_system.wait_for_counter(&counter);
     }
 }
 
@@ -160,11 +158,9 @@ impl<'a, T: Send + 'static> ParallelIterMut<'a, T> {
             trampoline: trampoline_fn,
         };
 
-        let counter = self
-            .job_system
-            .parallel_for_chunked_auto(0..len, move |range| unsafe {
+        self.job_system
+            .execute_parallel_for_auto(0..len, move |range| unsafe {
                 (ctx.trampoline)(ctx.op_addr as *const (), ctx.slice_addr as *const (), range);
             });
-        self.job_system.wait_for_counter(&counter);
     }
 }

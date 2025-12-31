@@ -884,6 +884,119 @@ impl JobSystem {
         self.parallel_for_chunked(range, batch_size, body)
     }
 
+    /// Executes a parallel for-loop synchronously, optimized for zero allocation.
+    ///
+    /// If called from a fiber, this uses stack-based synchronization (Continuation)
+    /// to avoid allocating a heap `Counter`.
+    pub fn execute_parallel_for<F>(&self, range: std::ops::Range<usize>, batch_size: usize, body: F)
+    where
+        F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
+    {
+        if range.is_empty() {
+            return;
+        }
+
+        use crate::fiber::Fiber;
+        use std::sync::atomic::{AtomicIsize, Ordering};
+
+        // If running in a fiber, use zero-allocation stack sync
+        if let Some(fiber_handle) = Fiber::current() {
+            let len = range.len();
+            let batch_size = batch_size.max(1);
+            let num_batches = len.div_ceil(batch_size);
+
+            // Use stack atomic for synchronization
+            // Initialize with num_batches + 1 (the +1 is held by this function)
+            let pending_count = AtomicIsize::new(num_batches as isize + 1);
+            let pending_ptr = &pending_count as *const AtomicIsize;
+            let pending_addr = pending_ptr as usize; // Cast to usize to be Send
+
+            let start = range.start;
+            let mut jobs = Vec::with_capacity(num_batches);
+
+            let fiber_handle_ptr = fiber_handle;
+            let job_sys = self as *const JobSystem;
+            let job_sys_addr = job_sys as usize; // Cast to usize to be Send
+
+            for i in 0..num_batches {
+                let chunk_start = start + i * batch_size;
+                let chunk_end = (chunk_start + batch_size).min(range.end);
+                let body = body.clone();
+
+                // Create job with raw pointers to stack data
+                // SAFETY: We suspend execution below until all jobs complete, ensuring
+                // stack variables (pending_count) remain valid.
+                let job = crate::job::Job::new(move || {
+                    body(chunk_start..chunk_end);
+
+                    // Decrement pending count
+                    // SAFETY: Dereferencing raw pointer to stack var valid because waiter is blocked
+                    let pending = unsafe { &*(pending_addr as *const AtomicIsize) };
+                    let prev = pending.fetch_sub(1, Ordering::SeqCst);
+
+                    if prev == 1 {
+                        // We are the last one (waiter already released its hold)
+                        // Resume the waiting fiber
+                        let js = unsafe { &*(job_sys_addr as *const JobSystem) };
+                        js.submit_to_injector(crate::job::Job::resume_job(fiber_handle_ptr));
+                    }
+                });
+                jobs.push(job);
+            }
+
+            self.worker_pool.submit_batch(jobs);
+
+            // Adaptive Spinning:
+            // Wait for jobs to finish without yielding if they are fast.
+            // We hold our "1" count, so jobs will NOT try to resume us while we are spinning
+            // (they only resume if fetch_sub returns 1).
+            let mut spin_count = 0;
+            const SPIN_LIMIT: usize = 5000;
+
+            while pending_count.load(Ordering::Acquire) > 1 {
+                if spin_count < SPIN_LIMIT {
+                    std::hint::spin_loop();
+                    spin_count += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Release our hold
+            let prev = pending_count.fetch_sub(1, Ordering::SeqCst);
+            if prev > 1 {
+                // Jobs are still running (and we timed out spinning), suspend.
+                Fiber::yield_now(crate::fiber::YieldType::Wait);
+            }
+            // Else: All jobs finished (either during spin or before).
+            // prev == 1 means we were the last holder, so we are done.
+        } else {
+            // Fallback for thread context
+            let counter = self.parallel_for_chunked(range, batch_size, body);
+            self.wait_for_counter(&counter);
+        }
+    }
+
+    /// Executes a parallel for-loop synchronously with automatic batching.
+    ///
+    /// Uses zero-allocation optimization if in a fiber.
+    pub fn execute_parallel_for_auto<F>(&self, range: std::ops::Range<usize>, body: F)
+    where
+        F: Fn(std::ops::Range<usize>) + Send + Sync + Clone + 'static,
+    {
+        let len = range.len();
+        if len == 0 {
+            return;
+        }
+
+        let num_workers = self.worker_pool.size();
+        let batches_per_worker = 8; // Moderate granularity
+        let target_batches = num_workers * batches_per_worker;
+        let batch_size = (len / target_batches).max(1);
+
+        self.execute_parallel_for(range, batch_size, body);
+    }
+
     /// Executes a parallel for-loop with a specific partitioner.
     pub fn parallel_for_partitioned<F>(
         &self,
