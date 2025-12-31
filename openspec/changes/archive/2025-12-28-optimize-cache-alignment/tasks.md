@@ -1,0 +1,7 @@
+- [x] Add `crossbeam-utils` dependency to `Cargo.toml`
+- [x] Apply `#[repr(align(128))]` to `InnerCounter` struct in `src/counter.rs`
+- [x] Apply `#[repr(align(64))]` to `WaitNode` struct in `src/fiber.rs`
+- [x] Verify alignment using a test case printing `std::mem::align_of` and `std::mem::size_of`
+- [x] Run `cargo bench` to capture performance impact
+- [x] Run NAS MG benchmark: `cargo run --release --bin benchmark_suite -- --bench=mg`
+- [x] Run NAS CG benchmark: `cargo run --release --bin benchmark_suite -- --bench=cg`

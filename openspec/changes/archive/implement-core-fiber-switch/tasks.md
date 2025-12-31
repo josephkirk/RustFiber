@@ -1,0 +1,20 @@
+- [x] Update Dependencies
+    - [x] Add `corosensei = "0.1"` to `RustFiber/Cargo.toml`
+- [x] Implement Fiber Struct
+    - [x] Update `RustFiber/src/fiber.rs` to wrap `corosensei::Coroutine`
+    - [x] Implement `Fiber::new(stack_size, job)` generic over the job type?
+- [x] Implement Fiber Pool
+    - [x] Create `RustFiber/src/fiber_pool.rs`
+    - [x] Implement pre-allocation and recycling of fibers
+- [x] Update Worker Loop
+    - [x] Modify `RustFiber/src/worker.rs` to use `FiberPool`
+    - [x] Implement `FiberState` handling (Yielded vs Complete)
+- [x] Implement Context Yield
+- [x] Implement Intrusive Wait List
+    - [x] Define `WaitNode` in `RustFiber/src/fiber.rs`
+    - [x] Update `AtomicCounter` in `RustFiber/src/counter.rs` to hold `AtomicPtr<WaitNode>`
+    - [x] Implement lock-free push in `wait_for_counter`
+    - [x] Implement batch wake in `AtomicCounter::signal`
+- [x] Verify Implementation
+    - [x] Create `tests/fiber_switch_test.rs` to verify yield behavior
+    - [x] Verify no OS thread yielding occurs during fiber yield

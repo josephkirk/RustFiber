@@ -1,0 +1,4 @@
+- [x] Implement Randomized Back-off in `Worker::run_loop` <!-- id: 0 -->
+- [x] Update `run_benchmarks.py` to use logarithmic scale for steal attempts <!-- id: 1 -->
+- [x] Fix overlapping "Success Rate" labels in benchmark visualization <!-- id: 2 -->
+- [x] Validate changes with `Work-Stealing Stress` benchmark <!-- id: 3 -->

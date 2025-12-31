@@ -1,0 +1,7 @@
+- [x] Define `AllocationScope` trait or TLS mechanism in `src/allocator.rs` or `src/worker.rs`.
+- [x] Implement `Worker`-local storage for `FrameAllocator` access.
+- [x] Modify `Job::new` (or introduce `Job::fast_new`) to attempt allocation via TLS `FrameAllocator`.
+- [x] Refactor `Job` enum `Work` to better support generic frame-allocated closures without manual `new_in_allocator` boilerplate.
+- [x] Update `src/worker.rs` to set/unset the TLS allocator during the run loop.
+- [x] Add tests ensuring Jobs created on worker threads are frame-allocated.
+- [x] Benchmark creation throughput (Global vs Frame).

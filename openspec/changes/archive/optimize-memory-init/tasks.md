@@ -1,0 +1,10 @@
+- [x] Implement `FiberPool::grow()` for incremental allocation.
+- [x] Update `Worker` to use incremental allocation or adhere to a config.
+- [x] Add `prefetch_pages: bool` to `FiberConfig` for runtime control over prefaulting
+- [x] Add error handling and logging for prefaulting failures (N/A: prefaulting currently disabled)
+- [x] Add startup latency benchmarks to verify 4-5ms improvement
+- [x] Add tests for incremental pool growth behavior
+- [x] Add tests for FiberConfig options and validation
+- [x] Update documentation for Windows limitations and current NUMA locality status
+- [x] (Optional) Investigate `corosensei` custom stack for Large Pages support. (Deferred to v0.3, see ROADMAP.md)
+- [x] Create `ROADMAP.md` to document future tasks (e.g. Large Pages).

@@ -1,0 +1,5 @@
+- [x] **Spec**: Create `work_stealing` spec <!-- id: 0 -->
+- [x] **Impl**: Refine `Worker::run_loop` to match spec (verify LIFO/FIFO) <!-- id: 1 -->
+- [x] **Impl**: Implement "Deep Idle" (parking) or verify "Yield" sufficiency <!-- id: 2 -->
+- [x] **Test**: Add unit tests for `Deque` ordering guarantees <!-- id: 3 -->
+- [x] **Verify**: Run benchmarks (`microbench_fibonacci`, `latency_test`) <!-- id: 4 -->
