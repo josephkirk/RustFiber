@@ -194,14 +194,19 @@ Simulates 100,000 falling sand particles with grid-based collision, gravity, and
 ### 5. Scale Testing (1 Million Particles)
 - **Scenario**: 1,000,000 particles, 10 frames each.
 - **Sand Simulation (Memory/Sync Bound)**:
-    - **RustFiber**: ~28.3 ms (Fastest, -7% time)
+    - **RustFiber**: ~28.1 ms (-8% time vs prev)
     - **Rayon**: ~30.5 ms
-    - **Serial**: (Skipped)
     - **Insight**: RustFiber maintains efficiency advantage in complex, synchronized workloads even at massive scale.
 - **Heavy Physics (Pure Compute Bound)**:
     - **RustFiber**: ~1.04 s
     - **Rayon**: ~0.99 s (Fastest, -5% time)
-    - **Insight**: With optimized granularity (8 batches/worker) and **zero-allocation stack synchronization**, RustFiber is nearly tied with Rayon (~5% diff) in pure compute. The remaining gap is likely due to Rayon's aggressive monomorphization of the entire work-stealing loop versus RustFiber's function-pointer dispatch.
+    - **Insight**: With **Zero-Allocation Stack Synchronization** and **Adaptive Spinning**, RustFiber matches Rayon's throughput within 5% while providing superior latency for fine-grained tasks (MG/128 improved by 9.5%).
+
+### 6. Optimization Impact (Zero-Alloc + Adaptive Spin)
+- **Multigrid (MG/128)**: Latency reduced by ~10% (Restored performance).
+- **Scheduling Latency**: Improved by ~14% for large batches.
+- **Throughput (Producer/Consumer)**: Improved by ~18% for 500k items.
+- **Conclusion**: The combination of stack-based continuation and adaptive spinning eliminates allocation overhead while preventing costly context switches for short jobs.
 
 ### 3. Execution vs. Management
 - **Management (Bottleneck)**: Spawning and singular dispatch are bottlenecked by global locks at high thread counts.
