@@ -1,5 +1,0 @@
-- [x] Implement `parallel_for` in `src/job_system.rs`
-- [x] Implement `parallel_for` in `src/context.rs`
-- [x] Add unit tests for `parallel_for` correctness (verify range coverage)
-- [x] Create `benchmarks/batching.rs` or update `tiny_tasks` to include a batched variant
-- [x] Compare performance results
