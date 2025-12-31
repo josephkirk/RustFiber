@@ -290,7 +290,7 @@ fn bench_sand_simulation(c: &mut Criterion) {
     let mut rng = rand::rng();
 
     let mut group = c.benchmark_group("simulation_backend_compare");
-    group.sample_size(10); 
+    group.sample_size(10);
 
     // 1. RustFiber JobSystem
     group.bench_function("sand_100k_job_system", |b| {
