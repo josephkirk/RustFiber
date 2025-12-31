@@ -1,0 +1,74 @@
+warning: field `stack` is never read
+   --> src\fiber.rs:101:5
+    |
+ 92 | pub struct Fiber {
+    |            ----- field in this struct
+...
+101 |     stack: Box<DefaultStack>,
+    |     ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `has_work` is never read
+   --> src\worker.rs:649:5
+    |
+641 | pub struct WorkerPool {
+    |            ---------- field in this struct
+...
+649 |     has_work: Arc<Vec<CachePadded<AtomicBool>>>,
+    |     ^^^^^^^^
+
+warning: `rustfiber` (lib) generated 2 warnings
+    Checking rustfiber v0.1.0 (G:\Projects\Arcel\RustFiber)
+error[E0373]: closure may outlive the current function, but it borrows `batch_counter`, which is owned by the current function
+  --> benches\throughput.rs:34:48
+   |
+34 |             let root = system.run_with_context(|ctx| {
+   |                                                ^^^^^ may outlive borrowed value `batch_counter`
+35 |                 for _ in 0..JOB_COUNT {
+36 |                     let cnt = batch_counter.clone();
+   |                               ------------- `batch_counter` is borrowed here
+   |
+note: function requires argument type to outlive `'static`
+  --> benches\throughput.rs:34:24
+   |
+34 |               let root = system.run_with_context(|ctx| {
+   |  ________________________^
+35 | |                 for _ in 0..JOB_COUNT {
+36 | |                     let cnt = batch_counter.clone();
+37 | |                     ctx.spawn_with_counter(
+...  |
+45 | |             });
+   | |______________^
+help: to force the closure to take ownership of `batch_counter` (and any other referenced variables), use the `move` keyword
+   |
+34 |             let root = system.run_with_context(move |ctx| {
+   |                                                ++++
+
+error[E0373]: closure may outlive the current function, but it borrows `batch_counter`, which is owned by the current function
+  --> benches\throughput.rs:77:52
+   |
+77 |                 let root = system.run_with_context(|ctx| {
+   |                                                    ^^^^^ may outlive borrowed value `batch_counter`
+78 |                     for _ in 0..JOB_COUNT {
+79 |                         let cnt = batch_counter.clone();
+   |                                   ------------- `batch_counter` is borrowed here
+   |
+note: function requires argument type to outlive `'static`
+  --> benches\throughput.rs:77:28
+   |
+77 |                   let root = system.run_with_context(|ctx| {
+   |  ____________________________^
+78 | |                     for _ in 0..JOB_COUNT {
+79 | |                         let cnt = batch_counter.clone();
+80 | |                         ctx.spawn_with_counter(
+...  |
+87 | |                 });
+   | |__________________^
+help: to force the closure to take ownership of `batch_counter` (and any other referenced variables), use the `move` keyword
+   |
+77 |                 let root = system.run_with_context(move |ctx| {
+   |                                                    ++++
+
+For more information about this error, try `rustc --explain E0373`.
+error: could not compile `rustfiber` (bench "throughput") due to 2 previous errors

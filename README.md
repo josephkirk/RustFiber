@@ -14,6 +14,7 @@ A high-performance fiber-based job system implementation in Rust, following the 
 - **Counter-Based Synchronization**: Track job completion without blocking
 - **Thread-Safe**: Built on Rust's ownership model and proven concurrency primitives
 - **Job Prioritization**: Schedule critical tasks with `High`, `Normal`, or `Low` priority
+- ✅ **Safe Parallel Iterators**: Rayon-like `par_iter` and `par_iter_mut` for slices.
 - ✅ **High Throughput**: Capable of millions of jobs per second
 - ✅ **Simple API**: Easy to use interface for job submission and synchronization
 - ✅ **Performance Monitoring**: Optional metrics collection for debugging throughput and bottlenecks
@@ -75,6 +76,23 @@ let counter = job_system.run_with_context(|ctx| {
 
 job_system.wait_for_counter(&counter);
 job_system.shutdown();
+```
+
+### Safe Parallel Iterators (Rayon-like)
+
+Process slices in parallel with a high-level API that handles batching and lifetime management automatically. Supports capturing stack variables!
+
+```rust
+use rustfiber::{JobSystem, ParallelSliceMut};
+
+let job_system = JobSystem::new(4);
+let mut data = vec![0; 100_000];
+
+// Safe parallel mutable iteration
+data.par_iter_mut(&job_system).for_each(|x| {
+    *x += 1;
+});
+// No need to manually wait; for_each blocks until completion.
 ```
 
 ### Simplified API with Presets
