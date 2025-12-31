@@ -210,9 +210,9 @@ pub enum PinningStrategy {
 
 pub use context::Context;
 pub use counter::Counter;
+pub use iter::{ParallelSlice, ParallelSliceMut};
 pub use job::Job;
 pub use job_system::{GranularityHint, JobSystem, JobSystemBuilder, JobSystemError, Partitioner};
-pub use iter::{ParallelSlice, ParallelSliceMut};
 
 pub mod iter;
 
